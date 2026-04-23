@@ -255,12 +255,7 @@ struct AnswerCardView: View {
         case .streaming, .done:
             ScrollView {
                 Markdown(viewModel.answer.isEmpty ? "…" : viewModel.answer)
-                    .markdownTextStyle(\.code) {
-                        FontFamilyVariant(.monospaced)
-                        FontSize(.em(0.92))
-                        BackgroundColor(Color.secondary.opacity(0.15))
-                    }
-                    .markdownTheme(.gitHub)
+                    .markdownTheme(.compactCard)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 14)
@@ -307,4 +302,80 @@ struct AnswerCardView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
     }
+}
+
+// MARK: - Compact markdown theme
+
+extension Theme {
+    /// Tight, floating-card-friendly theme. The stock `.gitHub` theme is
+    /// tuned for full-width documents — its H1 is ~2em, which swallows a
+    /// 440-wide card. Headings here are only slightly bigger than body.
+    static let compactCard = Theme()
+        .text {
+            FontSize(13)
+        }
+        .code {
+            FontFamilyVariant(.monospaced)
+            FontSize(.em(0.92))
+            BackgroundColor(.secondary.opacity(0.18))
+        }
+        .strong { FontWeight(.semibold) }
+        .link { ForegroundColor(.accentColor) }
+        .heading1 { configuration in
+            configuration.label
+                .markdownTextStyle {
+                    FontWeight(.semibold)
+                    FontSize(16)
+                }
+                .markdownMargin(top: 10, bottom: 4)
+        }
+        .heading2 { configuration in
+            configuration.label
+                .markdownTextStyle {
+                    FontWeight(.semibold)
+                    FontSize(14)
+                }
+                .markdownMargin(top: 8, bottom: 3)
+        }
+        .heading3 { configuration in
+            configuration.label
+                .markdownTextStyle {
+                    FontWeight(.semibold)
+                    FontSize(13)
+                }
+                .markdownMargin(top: 6, bottom: 2)
+        }
+        .paragraph { configuration in
+            configuration.label
+                .relativeLineSpacing(.em(0.22))
+                .markdownMargin(top: 0, bottom: 6)
+        }
+        .codeBlock { configuration in
+            ScrollView(.horizontal) {
+                configuration.label
+                    .relativeLineSpacing(.em(0.18))
+                    .markdownTextStyle {
+                        FontFamilyVariant(.monospaced)
+                        FontSize(.em(0.9))
+                    }
+                    .padding(8)
+            }
+            .background(Color.secondary.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .markdownMargin(top: 4, bottom: 6)
+        }
+        .listItem { configuration in
+            configuration.label
+                .markdownMargin(top: 2, bottom: 2)
+        }
+        .blockquote { configuration in
+            configuration.label
+                .padding(.leading, 10)
+                .overlay(alignment: .leading) {
+                    Rectangle()
+                        .fill(Color.secondary.opacity(0.4))
+                        .frame(width: 2)
+                }
+                .markdownMargin(top: 4, bottom: 4)
+        }
 }

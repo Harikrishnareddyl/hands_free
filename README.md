@@ -38,24 +38,13 @@ Open-source alternative to [Wispr Flow](https://wisprflow.ai), [Superwhisper](ht
 curl -fsSL https://raw.githubusercontent.com/Harikrishnareddyl/hands_free/main/install.sh | bash
 ```
 
-Downloads the latest DMG, installs `HandsFree` into `/Applications`, strips the Gatekeeper quarantine flag so it launches without the "unidentified developer" block, and opens the app. Takes ~10 seconds.
+Downloads the latest DMG, installs `HandsFree` into `/Applications`, launches the app. Takes ~10 seconds.
 
 ### Manual install
 
 1. Download the latest **`HandsFree-X.Y.Z.dmg`** from the [Releases](https://github.com/Harikrishnareddyl/hands_free/releases) page.
 2. Open the DMG and drag **HandsFree** into **Applications**.
-3. Launch from `/Applications`. macOS will block it with *"HandsFree can't be opened because Apple cannot check it for malicious software"* — the release isn't notarized because I don't have a paid Apple Developer account. Bypass it **once**, one of two ways:
-
-   **One-line Terminal command** (easiest, especially on macOS 15 Sequoia):
-   ```bash
-   xattr -dr com.apple.quarantine /Applications/HandsFree.app
-   ```
-   Then double-click HandsFree normally.
-
-   **Or via GUI:**
-   - Click **Done** in the block dialog (don't hit *Move to Trash*).
-   - Open **System Settings → Privacy & Security**, scroll to **Security** at the bottom, click **Open Anyway** next to the HandsFree notice, and enter your password. (On macOS 14 and earlier, right-click → *Open* → *Open* in Applications also works; macOS 15+ removed that shortcut for unnotarized apps.)
-
+3. Double-click **HandsFree** from Applications. Releases are **signed + notarized** by Apple — no Gatekeeper warning, no right-click-open, no quarantine workaround needed.
 4. The microphone icon appears in your menu bar.
 
 ## First-run setup
