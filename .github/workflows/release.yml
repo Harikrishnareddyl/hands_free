@@ -1,0 +1,60 @@
+name: Build DMG
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag for the DMG (e.g. 0.1.0)'
+        required: false
+        default: 'dev'
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: brew install xcodegen create-dmg
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${{ inputs.version || 'dev' }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build DMG (ad-hoc signed)
+        env:
+          SIGN_IDENTITY: '-'
+          VERSION: ${{ steps.version.outputs.version }}
+        run: ./scripts/build-dmg.sh
+
+      - name: Upload DMG as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HandsFree-${{ steps.version.outputs.version }}
+          path: HandsFree-*.dmg
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: HandsFree-*.dmg
+          generate_release_notes: true
+          body: |
+            ## Installation
+
+            1. Download `HandsFree-${{ steps.version.outputs.version }}.dmg` below.
+            2. Open it and drag **HandsFree** into your **Applications** folder.
+            3. Launch HandsFree from Applications. macOS will warn that it's from an "unidentified developer" because this build isn't notarized — right-click the app → **Open** → **Open** again. You only need to do this once.
+            4. Open **Settings** from the menu-bar icon → follow the "Setup guide" to configure your Groq API key.
+            5. Grant Microphone + Accessibility + (optional) Input Monitoring permissions when prompted.
+
+            Hold **⌃⌥D** or **Fn (🌐)** and speak to dictate.

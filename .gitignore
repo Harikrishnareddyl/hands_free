@@ -1,0 +1,23 @@
+.DS_Store
+xcuserdata/
+*.xcodeproj/
+build/
+DerivedData/
+.build/
+.swiftpm/
+Package.resolved
+*.xcworkspace/
+!default.xcworkspace/
+*.hmap
+*.ipa
+*.dSYM.zip
+
+# DMGs built locally — release artifacts are attached via GitHub Actions
+*.dmg
+
+# Icon intermediates (regenerable via scripts/make-icns.sh)
+scripts/.icon-build/
+HandsFree/Resources/AppIcon.iconset/
+
+# Local secrets
+.groq-key

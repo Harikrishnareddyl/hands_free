@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# Build a Release .dmg of HandsFree.
+#
+# Usage:
+#   ./scripts/build-dmg.sh            # builds with whatever project.yml says
+#   SIGN_IDENTITY=- ./scripts/build-dmg.sh   # force ad-hoc (useful in CI)
+#
+# Optional notarization (requires a paid Apple Developer account):
+#   APPLE_ID=you@example.com \
+#   APPLE_TEAM_ID=XXXXXXXXXX \
+#   APPLE_APP_PASSWORD=abcd-efgh-ijkl-mnop \
+#   SIGN_IDENTITY="Developer ID Application: You (XXXXXXXXXX)" \
+#   ./scripts/build-dmg.sh
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+VERSION="${VERSION:-$(grep CFBundleShortVersionString project.yml | head -1 | sed 's/.*"\([^"]*\)".*/\1/' || echo '0.1.0')}"
+SIGN_IDENTITY="${SIGN_IDENTITY:-HandsFree Dev}"
+BUILD_DIR=".build"
+STAGE_DIR=".build/dmg-staging"
+APP_PATH=".build/Build/Products/Release/HandsFree.app"
+DMG_PATH="HandsFree-${VERSION}.dmg"
+
+echo "→ Regenerating Xcode project"
+xcodegen generate >/dev/null
+
+echo "→ Building Release (will sign separately)"
+xcodebuild \
+  -project HandsFree.xcodeproj \
+  -scheme HandsFree \
+  -configuration Release \
+  -destination 'platform=macOS' \
+  -derivedDataPath "$BUILD_DIR" \
+  CODE_SIGN_IDENTITY="" \
+  CODE_SIGNING_REQUIRED=NO \
+  CODE_SIGNING_ALLOWED=NO \
+  build 2>&1 | grep -E "(error:|warning:|BUILD )" | grep -v "Metadata extraction" || true
+
+if [ ! -d "$APP_PATH" ]; then
+    echo "✗ Build failed — $APP_PATH not found"
+    exit 1
+fi
+
+echo "→ Signing app (identity: $SIGN_IDENTITY)"
+codesign --force --deep --sign "$SIGN_IDENTITY" --options runtime --timestamp=none "$APP_PATH"
+
+echo "→ Verifying code signature"
+codesign --verify --strict --verbose=2 "$APP_PATH" 2>&1 | tail -3 || true
+codesign -dv "$APP_PATH" 2>&1 | grep -E "(Identifier|Authority|Signature)" || true
+
+echo "→ Creating DMG"
+rm -f "$DMG_PATH"
+
+if command -v create-dmg >/dev/null 2>&1; then
+    # Pretty DMG with a drag-to-Applications layout. Window is 560×380,
+    # icons at fixed positions, finder sidebar hidden.
+    create-dmg \
+      --volname "HandsFree" \
+      --window-pos 200 120 \
+      --window-size 560 380 \
+      --icon-size 96 \
+      --icon "HandsFree.app" 150 180 \
+      --hide-extension "HandsFree.app" \
+      --app-drop-link 410 180 \
+      --no-internet-enable \
+      --hdiutil-quiet \
+      "$DMG_PATH" \
+      "$APP_PATH" >/dev/null 2>&1 || {
+        echo "  create-dmg failed; falling back to plain hdiutil"
+        rm -rf "$STAGE_DIR"
+        mkdir -p "$STAGE_DIR"
+        cp -R "$APP_PATH" "$STAGE_DIR/"
+        ln -s /Applications "$STAGE_DIR/Applications"
+        hdiutil create -volname "HandsFree" -srcfolder "$STAGE_DIR" \
+            -ov -format UDZO -fs HFS+ "$DMG_PATH" >/dev/null
+    }
+else
+    echo "  create-dmg not installed — producing plain DMG (brew install create-dmg for nice layout)"
+    rm -rf "$STAGE_DIR"
+    mkdir -p "$STAGE_DIR"
+    cp -R "$APP_PATH" "$STAGE_DIR/"
+    ln -s /Applications "$STAGE_DIR/Applications"
+    hdiutil create -volname "HandsFree" -srcfolder "$STAGE_DIR" \
+        -ov -format UDZO -fs HFS+ "$DMG_PATH" >/dev/null
+fi
+
+echo "→ Signing DMG"
+codesign --sign "$SIGN_IDENTITY" --timestamp=none "$DMG_PATH" || \
+  echo "  (codesign on DMG failed — self-signed certs can't always sign DMGs; the .app inside is still signed)"
+
+if [[ -n "${APPLE_ID:-}" && -n "${APPLE_TEAM_ID:-}" && -n "${APPLE_APP_PASSWORD:-}" ]]; then
+    echo "→ Submitting to Apple notary service"
+    xcrun notarytool submit "$DMG_PATH" \
+      --apple-id "$APPLE_ID" \
+      --team-id "$APPLE_TEAM_ID" \
+      --password "$APPLE_APP_PASSWORD" \
+      --wait
+    echo "→ Stapling notarization ticket"
+    xcrun stapler staple "$DMG_PATH"
+    echo "→ Verifying"
+    spctl -a -t open --context context:primary-signature -v "$DMG_PATH" || true
+else
+    echo "→ Skipping notarization (APPLE_ID / APPLE_TEAM_ID / APPLE_APP_PASSWORD not set)"
+    echo "  Recipients will see 'unidentified developer' on first launch."
+    echo "  They can right-click the app → Open → Open again to bypass."
+fi
+
+rm -rf "$STAGE_DIR"
+
+size=$(du -h "$DMG_PATH" | cut -f1)
+echo ""
+echo "✓ Built $DMG_PATH ($size)"
