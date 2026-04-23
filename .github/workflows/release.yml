@@ -20,6 +20,8 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive    # Vendor/livekit-wakeword carries the Swift package
 
       - name: Select latest Xcode
         run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer

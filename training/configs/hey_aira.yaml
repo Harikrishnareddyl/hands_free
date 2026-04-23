@@ -1,0 +1,115 @@
+# Production training config for the "Hey Aira" wake-word model used by the
+# Hands-Free macOS app. Output lands at `$OUTPUT_DIR/hey_aira/hey_aira.onnx`
+# (≈1 MB). Drop that file into HandsFree/Resources/ and flip the two strings
+# in WakeWordEngine.swift to ship it.
+#
+# This is the "overnight on a GPU" run — ~100k Phase-1 steps + 10k each for
+# phases 2/3. See training/README.md for wall-clock estimates.
+# For a fast sanity check (15–30 min), use hey_aira_test.yaml instead.
+
+model_name: hey_aira
+target_phrases: ["hey aira"]
+
+# ============================================================================
+# Data generation
+# ============================================================================
+
+n_samples: 25000
+n_samples_val: 5000
+n_background_samples: 2000
+n_background_samples_val: 500
+
+tts_batch_size: 100     # 100 is safe on an A100-40GB; drop to 50 on A10G.
+
+# Phonetic decoys that a naive classifier will happily trigger on. Keep this
+# list tight and specific to the target phrase — generic junk doesn't help.
+# "aira" rhymes with era / Ira / Sarah; neighbors include air, hair, area.
+custom_negative_phrases:
+  # Bare target without the "hey" prefix — the single biggest false trigger.
+  - "aira"
+  - "ayra"
+  - "aera"
+  # Phonetically adjacent names / words
+  - "hey era"
+  - "hey ira"
+  - "hey sarah"
+  - "hey tara"
+  - "hey laura"
+  - "hey clara"
+  - "hey kara"
+  - "hey mira"
+  - "hey ada"
+  - "hey ana"
+  - "hey ira"
+  # Rhyme / minimal-pair drift
+  - "hey air"
+  - "hey hair"
+  - "hey area"
+  - "hey arrow"
+  - "hey aura"
+  - "hey arya"
+  - "play era"
+  - "they are"
+  # Common adjacent English phrases that start with "hey"
+  - "hey there"
+  - "hey alexa"
+  - "hey siri"
+  - "hey google"
+
+# ============================================================================
+# Paths — the Modal entrypoint injects these, but keeping defaults here means
+# the same config works for a local run too.
+# ============================================================================
+
+data_dir: ./data
+output_dir: ./output
+
+# ============================================================================
+# Augmentation
+# ============================================================================
+
+augmentation:
+  clip_duration: 2.0
+  batch_size: 16
+  rounds: 3
+  background_paths: [./data/backgrounds]
+  rir_paths: [./data/rirs]
+
+# ============================================================================
+# Model architecture — must match the runtime (LiveKitWakeWord Swift package
+# expects conv_attention with the medium embedding head).
+# ============================================================================
+
+model:
+  model_type: conv_attention
+  model_size: medium
+
+# ============================================================================
+# Training
+# ============================================================================
+
+steps: 100000
+learning_rate: 0.0001
+weight_decay: 0.01
+label_smoothing: 0.05
+
+# Higher = fewer false positives (worth it for a consumer app where a single
+# spurious trigger is very visible). Start aggressive; you can re-train with
+# a lower value later if recall is too low.
+max_negative_weight: 3000
+
+# Target false-positive rate the trainer optimizes the threshold for.
+target_fp_per_hour: 0.1
+
+batch_n_per_class:
+  positive: 50
+  adversarial_negative: 50
+  ACAV100M_sample: 1024
+  background_noise: 50
+
+# Noise scales & length scales control TTS voice variety. Leave at upstream
+# defaults — they're tuned across the full Piper VITS speaker bank.
+noise_scales: [0.98]
+noise_scale_ws: [0.98]
+length_scales: [0.75, 1.0, 1.25]
+slerp_weights: [0.2, 0.35, 0.5, 0.65, 0.8]

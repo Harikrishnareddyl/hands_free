@@ -1,0 +1,8 @@
+# Local runs (shouldn't happen on your laptop — this is Modal-only — but just
+# in case you poke around with livekit-wakeword directly).
+data/
+output/
+*.onnx
+__pycache__/
+*.pyc
+.venv/

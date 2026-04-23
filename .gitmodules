@@ -1,0 +1,3 @@
+[submodule "Vendor/livekit-wakeword"]
+	path = Vendor/livekit-wakeword
+	url = https://github.com/livekit/livekit-wakeword.git

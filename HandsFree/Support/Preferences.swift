@@ -13,6 +13,8 @@ enum Preferences {
         static let minDurationSeconds = "minDurationSeconds"
         static let askAIModel = "askAIModel"
         static let askAISystemPrompt = "askAISystemPrompt"
+        static let wakeWordEnabled = "wakeWordEnabled"
+        static let maxDurationSeconds = "maxDurationSeconds"
     }
 
     static let defaultAskAISystemPrompt = """
@@ -65,6 +67,17 @@ enum Preferences {
         set { defaults.set(newValue, forKey: Key.minDurationSeconds) }
     }
 
+    // MARK: - Maximum recording duration (seconds). Applies to every mode —
+    // hold-to-talk, Fn hands-free, Ask AI, wake-word. A safety net against a
+    // stuck key or runaway session eating Groq credits.
+    static var maxDurationSeconds: Double {
+        get {
+            let v = defaults.double(forKey: Key.maxDurationSeconds)
+            return v <= 0 ? 180.0 : v
+        }
+        set { defaults.set(max(5, newValue), forKey: Key.maxDurationSeconds) }
+    }
+
     // MARK: - Ask AI (separate from transcription)
     static var askAIModel: String {
         get { defaults.string(forKey: Key.askAIModel) ?? GroqClient.LLMModel.llama33_70b }
@@ -75,4 +88,19 @@ enum Preferences {
         get { defaults.string(forKey: Key.askAISystemPrompt) ?? defaultAskAISystemPrompt }
         set { defaults.set(newValue, forKey: Key.askAISystemPrompt) }
     }
+
+    // MARK: - Wake word (opt-in; off by default).
+    static var wakeWordEnabled: Bool {
+        get { defaults.bool(forKey: Key.wakeWordEnabled) }
+        set {
+            defaults.set(newValue, forKey: Key.wakeWordEnabled)
+            NotificationCenter.default.post(name: .wakeWordPreferenceChanged, object: nil)
+        }
+    }
+}
+
+extension Notification.Name {
+    /// Posted whenever `Preferences.wakeWordEnabled` changes. AppDelegate
+    /// observes this to start/stop the always-on listener.
+    static let wakeWordPreferenceChanged = Notification.Name("handsfree.wakeWordPreferenceChanged")
 }
