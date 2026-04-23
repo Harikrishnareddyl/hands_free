@@ -63,7 +63,21 @@ if [ ! -d "$APP_PATH" ]; then
 fi
 
 echo "→ Signing app (identity: $SIGN_IDENTITY)"
-codesign --force --deep --sign "$SIGN_IDENTITY" --options runtime --timestamp "$APP_PATH"
+# Without --entitlements, the signed binary inherits ZERO entitlements and
+# hardened runtime blocks mic/camera/etc silently. Pass our entitlements
+# plist so com.apple.security.device.audio-input actually reaches the binary.
+ENTITLEMENTS="HandsFree/HandsFree.entitlements"
+if [ ! -f "$ENTITLEMENTS" ]; then
+    echo "✗ Entitlements file missing at $ENTITLEMENTS"
+    exit 1
+fi
+codesign --force --deep --sign "$SIGN_IDENTITY" --options runtime --timestamp \
+    --entitlements "$ENTITLEMENTS" "$APP_PATH"
+
+echo "→ Verifying embedded entitlements"
+codesign -d --entitlements - "$APP_PATH" 2>&1 | grep -q "audio-input" && \
+    echo "  ✓ com.apple.security.device.audio-input present" || \
+    (echo "  ✗ audio-input entitlement NOT present after signing"; exit 1)
 
 echo "→ Verifying code signature"
 codesign --verify --strict --verbose=2 "$APP_PATH" 2>&1 | tail -3 || true

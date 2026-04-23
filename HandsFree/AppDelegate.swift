@@ -32,7 +32,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         LaunchGuards.nudgeToApplicationsIfNeeded()
 
         _ = HistoryStore.shared                 // warm up DB
-        recorder.prepareEngine()                // warm up audio hardware
+        // NOTE: deliberately NOT calling recorder.prepareEngine() at launch.
+        // Querying the input node before the user explicitly invokes
+        // dictation looks to TCC like an un-requested mic access attempt —
+        // on hardened-runtime builds without proper entitlements this can
+        // silently poison the bundle's mic state. First record lazily.
         setupStatusItem()
         requestNotificationAccess()
         logPermissionSnapshot()
