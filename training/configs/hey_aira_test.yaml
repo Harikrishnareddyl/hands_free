@@ -1,0 +1,54 @@
+# Smoke-test config — runs the full generate → augment → train → export → eval
+# pipeline in ~15–30 min on any GPU. Use it to validate the Modal environment
+# before kicking off the overnight production run. The model it produces will
+# NOT be usable in the app (accuracy is garbage at 500 steps), but if this
+# completes cleanly, the prod run will too.
+
+model_name: hey_aira_test
+target_phrases: ["hey aira"]
+
+n_samples: 200
+n_samples_val: 40
+n_background_samples: 80
+n_background_samples_val: 20
+tts_batch_size: 10
+
+custom_negative_phrases:
+  - "aira"
+  - "hey era"
+  - "hey ira"
+  - "hey sarah"
+  - "hey there"
+  - "hey alexa"
+
+data_dir: ./data
+output_dir: ./output
+
+augmentation:
+  clip_duration: 2.0
+  batch_size: 8
+  rounds: 2
+  background_paths: [./data/backgrounds]
+  rir_paths: [./data/rirs]
+
+# Use the same architecture as prod so the Swift runtime can load the ONNX —
+# the Resources in the LiveKitWakeWord Swift package assume conv_attention.
+model:
+  model_type: conv_attention
+  model_size: medium
+
+steps: 500
+learning_rate: 0.001
+max_negative_weight: 1000
+target_fp_per_hour: 1.0
+
+batch_n_per_class:
+  positive: 10
+  adversarial_negative: 10
+  ACAV100M_sample: 64
+  background_noise: 10
+
+noise_scales: [0.98]
+noise_scale_ws: [0.98]
+length_scales: [1.0]
+slerp_weights: [0.5]

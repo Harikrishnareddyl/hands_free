@@ -36,10 +36,15 @@ enum SoundEffects {
     // "Thinking" tick — G6 (≈1568 Hz), clearly higher register than the chimes
     // so it reads as a tick rather than a small version of the end chime.
     private static let tickFreq: Double  = 1567.98
+    // Countdown tick — a step higher (A6 ≈ 1760 Hz) and noticeably louder than
+    // the processing tick, so the final-seconds warning stands out without
+    // clashing with any bell already in flight.
+    private static let countdownFreq: Double = 1760.0
 
     // Volume levels. AVAudioEngine output is in [-1, 1] linear amplitude.
     private static let chimeVolume: Float = 0.10   // ≈ -20 dBFS — present but not startling
     private static let tickVolume: Float  = 0.015  // ≈ -36 dBFS — barely there, just a pulse
+    private static let countdownVolume: Float = 0.06  // ≈ -24 dBFS — ~4× louder than the processing tick
 
     static func playStart() {
         guard ensureStarted() else { return }
@@ -49,6 +54,14 @@ enum SoundEffects {
     static func playEnd() {
         guard ensureStarted() else { return }
         chimeNode.scheduleBuffer(bellBuffer(fundamental: endFreq), at: nil, options: .interrupts)
+    }
+
+    /// One-shot countdown pulse for the final-5-seconds warning. Higher and
+    /// louder than the processing tick so it reads as "hurry up" rather than
+    /// "still thinking".
+    static func playCountdownTick() {
+        guard ensureStarted() else { return }
+        chimeNode.scheduleBuffer(countdownTickBuffer(), at: nil, options: [])
     }
 
     /// Starts a quiet periodic "tick" loop — a tiny soft chime every ~1.5 s —
@@ -163,6 +176,39 @@ enum SoundEffects {
             let fund = sin(2 * .pi * tickFreq * t)
             let octave = sin(2 * .pi * tickFreq * 2.0 * t) * 0.15
             samples[i] = Float(fund + octave) * envelope * tickVolume
+        }
+        return buffer
+    }
+
+    /// Short one-shot tick used for the final-5-seconds countdown. Same
+    /// shape as the processing tick (attack+exp decay) but at `countdownFreq`
+    /// and `countdownVolume` so it punches through the ambient sound.
+    private static func countdownTickBuffer() -> AVAudioPCMBuffer {
+        let duration = 0.10
+        let attack = 0.003
+        let decayConstant = 0.030
+
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1) else {
+            return silentBuffer()
+        }
+        let frames = AVAudioFrameCount(sampleRate * duration)
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else {
+            return silentBuffer()
+        }
+        buffer.frameLength = frames
+        guard let samples = buffer.floatChannelData?[0] else { return buffer }
+
+        for i in 0..<Int(frames) {
+            let t = Double(i) / sampleRate
+            let envelope: Float
+            if t < attack {
+                envelope = Float(t / attack)
+            } else {
+                envelope = Float(exp(-(t - attack) / decayConstant))
+            }
+            let fund = sin(2 * .pi * countdownFreq * t)
+            let octave = sin(2 * .pi * countdownFreq * 2.0 * t) * 0.12
+            samples[i] = Float(fund + octave) * envelope * countdownVolume
         }
         return buffer
     }

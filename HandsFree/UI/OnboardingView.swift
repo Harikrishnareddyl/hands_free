@@ -21,6 +21,7 @@ struct OnboardingView: View {
     @State private var imStatus: Status = .unknown     // Input Monitoring (optional)
     @State private var keyStatus: Status = .unknown
     @State private var pollTimer: Timer?
+    @AppStorage("wakeWordEnabled") private var wakeWordEnabled: Bool = false
 
     private var requiredGranted: Bool {
         micStatus == .granted && axStatus == .granted && keyStatus == .granted
@@ -70,6 +71,8 @@ struct OnboardingView: View {
                 actionLabel: "Open Settings",
                 action: onTryInstallFn
             )
+
+            wakeWordRow
 
             Divider()
             footer
@@ -167,6 +170,45 @@ struct OnboardingView: View {
             case .missing:
                 Button(actionLabel) { action() }
             }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var wakeWordRow: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "waveform.badge.mic")
+                .font(.system(size: 18))
+                .foregroundStyle(Color(red: 0.42, green: 0.20, blue: 0.95))
+                .frame(width: 28)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text("Wake word").fontWeight(.medium)
+                    Text("OPT-IN")
+                        .font(.system(size: 9, weight: .bold))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Color.blue.opacity(0.12))
+                        .foregroundStyle(.blue)
+                        .cornerRadius(3)
+                }
+                Text("Say \u{201C}\(WakeWordEngine.wakePhrase)\u{201D} to dictate without a hotkey. Listens on-device; audio only leaves your Mac after the phrase fires.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer()
+
+            Toggle("", isOn: Binding(
+                get: { wakeWordEnabled },
+                set: { newValue in
+                    wakeWordEnabled = newValue
+                    Preferences.wakeWordEnabled = newValue
+                }
+            ))
+            .toggleStyle(.switch)
+            .labelsHidden()
         }
         .padding(.vertical, 4)
     }

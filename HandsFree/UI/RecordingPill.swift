@@ -142,7 +142,7 @@ struct PillContent: View {
     private var recordingBody: some View {
         HStack(spacing: 5) {
             RecordingDot()
-            WaveformBars(barCount: 7, maxHeight: 12, tint: .primary.opacity(0.85))
+            WaveformOrCountdown(barCount: 7, maxHeight: 12, tint: .primary.opacity(0.85))
         }
         .padding(.horizontal, 10)
         .frame(maxHeight: .infinity)
@@ -175,7 +175,7 @@ struct PillContent: View {
 
             // Tapping the waveform also submits.
             Button(action: onSubmit) {
-                WaveformBars(barCount: 7, maxHeight: 12, tint: .primary.opacity(0.85))
+                WaveformOrCountdown(barCount: 7, maxHeight: 12, tint: .primary.opacity(0.85))
                     .frame(maxWidth: .infinity, maxHeight: 12)
                     .contentShape(Rectangle())
             }
@@ -201,6 +201,32 @@ struct PillContent: View {
 }
 
 // MARK: - Reactive waveform
+
+/// Swaps between the live waveform and a final-seconds countdown number.
+/// `SessionCountdown.shared.secondsRemaining` is nil for normal recording;
+/// when the session timer enters the last few seconds before the max-duration
+/// cap it publishes 5, 4, 3, 2, 1, and we render the number in place of the
+/// waveform so the user sees the deadline without extra chrome.
+private struct WaveformOrCountdown: View {
+    @ObservedObject private var countdown = SessionCountdown.shared
+
+    let barCount: Int
+    let maxHeight: CGFloat
+    let tint: Color
+
+    var body: some View {
+        if let n = countdown.secondsRemaining, n > 0 {
+            Text("\(n)")
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(Color.red.opacity(0.92))
+                .frame(maxWidth: .infinity)
+                .transition(.opacity)
+        } else {
+            WaveformBars(barCount: barCount, maxHeight: maxHeight, tint: tint)
+        }
+    }
+}
 
 /// Vertical bars whose amplitude tracks `AudioLevelMonitor.shared.level`. A
 /// phase-offset sine per bar keeps the motion organic even during silence.

@@ -10,12 +10,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let fnKey = FnHotKeyMonitor()
     private let askAIKey = AskAIHotKeyManager()
     private let recorder = AudioRecorder()
+    private let wakeWord = WakeWordEngine()
     private let windows = WindowCoordinator()
     private let pill = RecordingPill()
     private let answerCard = AnswerCardPanel()
 
     private var isRecording = false
     private var contextBundleID: String?
+
+    /// `true` while a wake-word-initiated hands-free session is running. Used
+    /// to gate the VAD auto-submit so manually latched hands-free sessions
+    /// still require an explicit tap / submit.
+    private var wakeSessionActive = false
+    /// Unified 10 Hz timer that runs for every recording session. Handles:
+    ///   1. Max-duration cap (all modes)
+    ///   2. Last-5-seconds countdown UI + tick sound (all modes)
+    ///   3. VAD silence-based auto-submit (wake sessions only)
+    /// Nil when no recording is in flight.
+    private var sessionTimer: Timer?
+    private var sessionStartedAt: Date?
+    private var lastCountdownSecondTicked: Int?
+    private var vadHeardSpeech = false
+    private var vadSilentSince: Date?
 
     /// Tracks which feature owns the current recording so the Fn/⌃D and the
     /// Ask-AI hotkeys can't step on each other. Set/cleared by the
@@ -80,10 +96,166 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pill.onSubmit = { [weak self] in self?.submitHandsFree() }
         pill.onCancel = { [weak self] in self?.cancelHandsFree() }
 
+        wakeWord.onDetected = { [weak self] in self?.handleWakeWordDetected() }
+
         showOnboardingIfNeeded()
         honorPendingMicRequest()
         startPermissionWatcher()
         checkForUpdatesInBackground()
+        refreshWakeWordEngine()
+        NotificationCenter.default.addObserver(
+            forName: .wakeWordPreferenceChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.refreshWakeWordEngine() }
+        }
+    }
+
+    // MARK: - Wake word
+
+    /// Start or stop the wake-word listener based on current preferences and
+    /// permissions. Called on launch, whenever the setting toggles, and after
+    /// each recording clip ends (to resume listening).
+    private func refreshWakeWordEngine() {
+        let wantListening = Preferences.wakeWordEnabled
+            && AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+            && !isRecording
+            && recordingMode == .none
+
+        if wantListening && !wakeWord.isRunning {
+            do {
+                try wakeWord.start()
+            } catch {
+                Log.error("app", "wake word start failed: \(error.localizedDescription)")
+            }
+        } else if !wantListening && wakeWord.isRunning {
+            wakeWord.stop()
+        }
+    }
+
+    private func handleWakeWordDetected() {
+        guard Preferences.wakeWordEnabled else { return }
+        guard recordingMode == .none, !isRecording else {
+            Log.info("app", "wake detected but already recording; ignored")
+            return
+        }
+        Log.info("app", "wake word → starting hands-free session")
+        // Release the mic before the recorder grabs it.
+        wakeWord.stop()
+        startRecorderSilent()
+        wakeSessionActive = true
+        fnState = .handsFree
+        commitHandsFreeUI()   // starts the session timer (VAD + cap)
+    }
+
+    // MARK: - Session timer (duration cap + countdown + VAD)
+
+    /// Start warning the user this many seconds before the hard cap.
+    private let countdownLeadSeconds: Int = 5
+    /// VAD silence-after-speech threshold — how long the mic must stay quiet
+    /// once the user has started talking before we auto-submit. Only runs for
+    /// wake-triggered sessions; manual hands-free waits for an explicit tap.
+    private let vadSilenceThreshold: TimeInterval = 1.5
+    /// Level below which we consider the mic silent. Shaped 0…1 level is
+    /// ~0.02 in a quiet room; speech sits around 0.15+.
+    private let vadSilentLevel: Float = 0.06
+    /// Level above which we decide the user has started speaking.
+    private let vadSpeechLevel: Float = 0.12
+
+    private func startSessionTimer() {
+        sessionTimer?.invalidate()
+        sessionStartedAt = Date()
+        lastCountdownSecondTicked = nil
+        vadHeardSpeech = false
+        vadSilentSince = nil
+        SessionCountdown.shared.clear()
+        sessionTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.tickSession() }
+        }
+    }
+
+    private func stopSessionTimer() {
+        sessionTimer?.invalidate()
+        sessionTimer = nil
+        sessionStartedAt = nil
+        lastCountdownSecondTicked = nil
+        vadHeardSpeech = false
+        vadSilentSince = nil
+        SessionCountdown.shared.clear()
+    }
+
+    private func tickSession() {
+        guard let start = sessionStartedAt else {
+            stopSessionTimer()
+            return
+        }
+        guard isRecording, recordingMode != .none else {
+            // Recorder or mode was cleared out from under us — nothing to do.
+            stopSessionTimer()
+            return
+        }
+
+        let now = Date()
+        let elapsed = now.timeIntervalSince(start)
+        let cap = Preferences.maxDurationSeconds
+        let remaining = cap - elapsed
+
+        // Countdown UI + subtle per-second ticks inside the final stretch.
+        if remaining <= Double(countdownLeadSeconds) && remaining > 0 {
+            let shown = Int(ceil(remaining))
+            SessionCountdown.shared.set(shown)
+            if lastCountdownSecondTicked != shown {
+                lastCountdownSecondTicked = shown
+                if Preferences.audioCueMode != .off {
+                    SoundEffects.playCountdownTick()
+                }
+            }
+        } else {
+            SessionCountdown.shared.clear()
+        }
+
+        // Hard cap — auto-terminate the active mode.
+        if elapsed >= cap {
+            Log.info("app", "session: hit max duration \(String(format: "%.1f", cap))s, auto-terminating mode=\(recordingMode)")
+            autoTerminateForMaxDuration()
+            return
+        }
+
+        // VAD auto-submit is wake-only.
+        guard wakeSessionActive, recordingMode == .dictateHandsFree else { return }
+        let level = AudioLevelMonitor.shared.level
+        if level >= vadSpeechLevel {
+            vadHeardSpeech = true
+            vadSilentSince = nil
+        } else if vadHeardSpeech && level < vadSilentLevel {
+            if vadSilentSince == nil { vadSilentSince = now }
+            if let since = vadSilentSince,
+               now.timeIntervalSince(since) >= vadSilenceThreshold {
+                Log.info("app", "VAD: silence after speech, auto-submit")
+                submitHandsFree()
+            }
+        } else {
+            vadSilentSince = nil
+        }
+    }
+
+    /// Called when the max-duration cap expires. Dispatches to whichever
+    /// end-of-session path matches the current mode — same as if the user
+    /// had released the hotkey / hit submit themselves.
+    private func autoTerminateForMaxDuration() {
+        // Clear the Fn state defensively — a PTT auto-stop while the user is
+        // still holding the key would otherwise leave fnState stuck.
+        if fnState != .idle { fnState = .idle }
+
+        switch recordingMode {
+        case .dictate, .dictateHandsFree:
+            endDictateRecording()
+        case .askAI:
+            endAskAIRecording()
+        case .none:
+            stopSessionTimer()
+        }
     }
 
     // MARK: - Runtime permission watcher
@@ -336,6 +508,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func beginDictateRecording() {
         guard recordingMode == .none else { return }
+        wakeWord.stop()
         recordingMode = .dictate
         startRecording()
     }
@@ -434,6 +607,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// tap or a hold.
     private func startRecorderSilent() {
         guard !isRecording else { return }
+        wakeWord.stop()
         contextBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         do {
             try recorder.start()
@@ -451,6 +625,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setState("Recording…", symbol: "waveform")
         pill.setState(.recording)
         if Preferences.audioCueMode != .off { SoundEffects.playStart() }
+        startSessionTimer()
     }
 
     /// Called on double-tap confirmation — interactive pill + start cue.
@@ -459,6 +634,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setState("Recording (hands-free)…", symbol: "waveform")
         pill.setState(.handsFree)
         if Preferences.audioCueMode != .off { SoundEffects.playStart() }
+        startSessionTimer()
     }
 
     /// Stop the silent recorder and delete the unfinished file. Does NOT
@@ -466,9 +642,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func discardRecorderSilent() {
         guard isRecording else { return }
         isRecording = false
+        stopSessionTimer()
         if let (url, _) = recorder.stop() {
             try? FileManager.default.removeItem(at: url)
         }
+        refreshWakeWordEngine()
     }
 
     /// User confirmed — stop recording and run the normal transcribe pipeline.
@@ -479,6 +657,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ignoreNextFnUp = false
         fnReleasePendingTask?.cancel()
         fnReleasePendingTask = nil
+        stopSessionTimer()
+        wakeSessionActive = false
         recordingMode = .none
         stopAndTranscribe()
     }
@@ -491,14 +671,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ignoreNextFnUp = false
         fnReleasePendingTask?.cancel()
         fnReleasePendingTask = nil
+        stopSessionTimer()
+        wakeSessionActive = false
         recordingMode = .none
         discardRecording()
+        refreshWakeWordEngine()
     }
 
     /// Stop the recorder without transcribing. Used by hands-free cancel.
     private func discardRecording() {
         guard isRecording else { return }
         isRecording = false
+        stopSessionTimer()
         if let (url, _) = recorder.stop() {
             try? FileManager.default.removeItem(at: url)
         }
@@ -518,6 +702,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             setState("Recording…", symbol: "waveform")
             pill.setState(.recording)
             if Preferences.audioCueMode != .off { SoundEffects.playStart() }
+            startSessionTimer()
         } catch {
             Log.error("app", "startRecording failed: \(error.localizedDescription)")
             pill.setState(.hidden)
@@ -528,10 +713,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func stopAndTranscribe() {
         guard isRecording else { return }
         isRecording = false
+        stopSessionTimer()
 
         guard let (url, duration) = recorder.stop() else {
             setState("Idle", symbol: "mic.fill")
             pill.setState(.hidden)
+            refreshWakeWordEngine()
             return
         }
 
@@ -541,6 +728,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             try? FileManager.default.removeItem(at: url)
             setState("Idle", symbol: "mic.fill")
             pill.setState(.hidden)
+            refreshWakeWordEngine()
             return
         }
 
@@ -598,6 +786,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.pill.setState(.hidden)
                 if Preferences.audioCueMode != .off { SoundEffects.playEnd() }
                 self.deliver(finalText)
+                self.refreshWakeWordEngine()
             }
         } catch {
             Log.error("app", "transcribe pipeline failed: \(error.localizedDescription)")
@@ -606,6 +795,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.setState("Idle", symbol: "mic.fill")
                 self.pill.setState(.hidden)
                 self.showError(error.localizedDescription)
+                self.refreshWakeWordEngine()
             }
         }
     }
@@ -616,6 +806,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard recordingMode == .none else { return }
         guard !isRecording else { return }
 
+        wakeWord.stop()
         do {
             try recorder.start()
             isRecording = true
@@ -623,6 +814,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             setState("Recording (Ask AI)…", symbol: "waveform")
             pill.setState(.recording)
             if Preferences.audioCueMode != .off { SoundEffects.playStart() }
+            startSessionTimer()
         } catch {
             Log.error("app", "askAI startRecording failed: \(error.localizedDescription)")
             pill.setState(.hidden)
@@ -634,14 +826,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard recordingMode == .askAI else { return }
         guard isRecording else {
             recordingMode = .none
+            stopSessionTimer()
             return
         }
         isRecording = false
         recordingMode = .none
+        stopSessionTimer()
 
         guard let (url, duration) = recorder.stop() else {
             setState("Idle", symbol: "mic.fill")
             pill.setState(.hidden)
+            refreshWakeWordEngine()
             return
         }
 
@@ -651,6 +846,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             try? FileManager.default.removeItem(at: url)
             setState("Idle", symbol: "mic.fill")
             pill.setState(.hidden)
+            refreshWakeWordEngine()
             return
         }
 
@@ -696,6 +892,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.setState("Idle", symbol: "mic.fill")
                     self.pill.setState(.hidden)
                     self.showNotification(title: "Hands-Free", body: "No speech detected.")
+                    self.refreshWakeWordEngine()
                 }
                 return
             }
@@ -726,6 +923,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.setState("Idle", symbol: "mic.fill")
                 if Preferences.audioCueMode != .off { SoundEffects.playEnd() }
                 self.answerCard.setDone()
+                self.refreshWakeWordEngine()
             }
         } catch {
             Log.error("app", "askAI pipeline failed: \(error.localizedDescription)")
@@ -734,6 +932,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.setState("Idle", symbol: "mic.fill")
                 self.pill.setState(.hidden)
                 self.answerCard.setError(error.localizedDescription)
+                self.refreshWakeWordEngine()
             }
         }
     }

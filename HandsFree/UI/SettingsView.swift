@@ -12,13 +12,16 @@ struct SettingsView: View {
     @AppStorage("transcriptionVocabulary")  private var vocabulary = ""
     @AppStorage("language")                 private var language = ""
     @AppStorage("minDurationSeconds")       private var minDuration = 1.0
+    @AppStorage("maxDurationSeconds")       private var maxDuration = 180.0
     @AppStorage("askAIModel")               private var askAIModel = GroqClient.LLMModel.llama33_70b
     @AppStorage("askAISystemPrompt")        private var askAISystemPrompt = Preferences.defaultAskAISystemPrompt
+    @AppStorage("wakeWordEnabled")          private var wakeWordEnabled = false
 
     var body: some View {
         Form {
             apiKeySection
             hotkeySection
+            wakeWordSection
             transcriptionSection
             askAISection
             soundsSection
@@ -76,6 +79,32 @@ struct SettingsView: View {
             Text("Fn (🌐) always triggers dictation, regardless of this setting.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    // MARK: - Wake word
+
+    private var wakeWordSection: some View {
+        Section("Wake word") {
+            Toggle(isOn: Binding(
+                get: { wakeWordEnabled },
+                set: { newValue in
+                    wakeWordEnabled = newValue
+                    Preferences.wakeWordEnabled = newValue
+                }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Say \u{201C}\(WakeWordEngine.wakePhrase)\u{201D} to dictate")
+                    Text("Always listens on-device. Audio only leaves your Mac after the phrase fires.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if wakeWordEnabled {
+                Text("After the cue, start speaking. Hands-Free auto-submits once you pause for about a second — or click the pill to cancel.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -137,6 +166,22 @@ struct SettingsView: View {
                     Text("s")
                         .foregroundStyle(.secondary)
                 }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                LabeledContent("Max clip") {
+                    HStack(spacing: 4) {
+                        TextField("", value: $maxDuration, format: .number.precision(.fractionLength(0)))
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 60)
+                        Text("s")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Text("Hard cap on every recording — hold-to-talk, hands-free, Ask AI, and wake word. A countdown appears in the pill and ticks for the final 5 seconds.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             VStack(alignment: .leading, spacing: 6) {
@@ -201,7 +246,7 @@ struct SettingsView: View {
                     Text(mode.label).tag(mode)
                 }
             }
-            .onChange(of: audioCueMode) { newValue in
+            .onChange(of: audioCueMode) { _, newValue in
                 Preferences.audioCueMode = newValue
                 if newValue == .off { SoundEffects.stopHum() }
             }
