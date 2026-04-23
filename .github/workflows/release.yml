@@ -42,11 +42,58 @@ jobs:
             echo "version=${{ inputs.version || 'dev' }}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build DMG (ad-hoc signed)
+      # Import the .p12 signing cert from GitHub secrets into a temp keychain,
+      # so every release is signed with the same identity (stable TCC entries).
+      # If the secrets aren't configured, falls back to ad-hoc signing.
+      - name: Import signing certificate
+        id: signing
         env:
-          SIGN_IDENTITY: '-'
+          SIGNING_CERT_P12_BASE64: ${{ secrets.SIGNING_CERT_P12_BASE64 }}
+          SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+        run: |
+          if [ -z "$SIGNING_CERT_P12_BASE64" ]; then
+            echo "::notice::SIGNING_CERT_P12_BASE64 not set — falling back to ad-hoc signing"
+            echo "identity=-" >> "$GITHUB_OUTPUT"
+            echo "keychain=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          CERT="$RUNNER_TEMP/cert.p12"
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASS=$(openssl rand -base64 24)
+
+          echo "$SIGNING_CERT_P12_BASE64" | base64 --decode > "$CERT"
+
+          security create-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN"
+          security import "$CERT" -P "$SIGNING_CERT_PASSWORD" -k "$KEYCHAIN" -T /usr/bin/codesign
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASS" "$KEYCHAIN" >/dev/null
+
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" 2>/dev/null \
+                      | grep -m1 -oE '"[^"]+"' | tr -d '"')
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::No code-signing identity found after import"
+            security find-identity -p codesigning "$KEYCHAIN"
+            exit 1
+          fi
+          echo "Imported identity: $IDENTITY"
+          echo "identity=$IDENTITY" >> "$GITHUB_OUTPUT"
+          echo "keychain=$KEYCHAIN" >> "$GITHUB_OUTPUT"
+
+          rm -f "$CERT"
+
+      - name: Build DMG
+        env:
+          SIGN_IDENTITY: ${{ steps.signing.outputs.identity }}
           VERSION: ${{ steps.version.outputs.version }}
         run: ./scripts/build-dmg.sh
+
+      - name: Clean up signing keychain
+        if: always() && steps.signing.outputs.keychain != ''
+        run: |
+          security delete-keychain "${{ steps.signing.outputs.keychain }}" 2>/dev/null || true
 
       - name: Upload DMG as artifact
         uses: actions/upload-artifact@v4

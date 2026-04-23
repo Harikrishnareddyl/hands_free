@@ -200,7 +200,7 @@ To produce a shareable DMG:
 
 Output: `HandsFree-0.1.0.dmg` in the repo root. See the script's header for notarization options (requires a paid Apple Developer account).
 
-Releases are built automatically by `.github/workflows/release.yml` on every `v*` tag push.
+Releases are built automatically by `.github/workflows/release.yml` on every `v*` tag push. By default the workflow uses ad-hoc signing — for stable signatures that let user TCC permissions persist across releases, follow [docs/SIGNING.md](docs/SIGNING.md) to export your local cert and add it as GitHub secrets.
 
 ## Project layout
 
