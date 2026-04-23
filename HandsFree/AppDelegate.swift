@@ -5,7 +5,6 @@ import UserNotifications
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
-    private var stateMenuItem: NSMenuItem?
 
     private let hotKey = HotKeyManager()
     private let fnKey = FnHotKeyMonitor()
@@ -18,11 +17,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isRecording = false
     private var contextBundleID: String?
 
-    /// Tracks which feature owns the current recording so the Fn/⌃⌥D and the
+    /// Tracks which feature owns the current recording so the Fn/⌃D and the
     /// Ask-AI hotkeys can't step on each other. Set/cleared by the
     /// `beginDictate…` / `beginAskAI…` wrappers around the existing pipeline.
-    private enum RecordingMode { case none, dictate, askAI }
+    /// `.dictateHandsFree` is a latched variant entered by double-tapping Fn:
+    /// the recorder keeps running until the user clicks Submit/Cancel on the
+    /// pill or single-taps Fn again.
+    private enum RecordingMode { case none, dictate, askAI, dictateHandsFree }
     private var recordingMode: RecordingMode = .none
+
+    // MARK: - Fn double-tap gesture state
+
+    private enum FnGestureState {
+        case idle            // no Fn interaction in flight
+        case pressActive     // press received, recorder running silently, waiting to commit
+        case pttActive       // committed to PTT (pill + sound shown)
+        case releasePending  // tap released, waiting for possible double-tap
+        case handsFree       // double-tap confirmed; pill is interactive, recording continues
+    }
+    private var fnState: FnGestureState = .idle
+    private var fnHoldPromoteTask: Task<Void, Never>?
+    private var fnReleasePendingTask: Task<Void, Never>?
+    private var ignoreNextFnUp = false
+
+    /// A press shorter than this is a tap, not a hold. Until this elapses we
+    /// record silently (no pill, no sound) so a stray single tap is invisible.
+    private let tapMaxPressDuration: TimeInterval = 0.25
+    /// Window (from first release to second press) within which a second tap
+    /// is treated as the second half of a double-tap.
+    private let tapMaxInterGap: TimeInterval = 0.35
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Log.info("app", "launched, pid=\(ProcessInfo.processInfo.processIdentifier), bundle=\(Bundle.main.bundlePath)")
@@ -45,13 +68,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotKey.onReleased = { [weak self] in self?.endDictateRecording() }
         hotKey.install()
 
-        fnKey.onPressed = { [weak self] in self?.beginDictateRecording() }
-        fnKey.onReleased = { [weak self] in self?.endDictateRecording() }
+        fnKey.onPressed = { [weak self] in self?.handleFnDown() }
+        fnKey.onReleased = { [weak self] in self?.handleFnUp() }
         _ = fnKey.install()   // silent attempt; onboarding handles the UX if it fails
 
         askAIKey.onPressed = { [weak self] in self?.beginAskAIRecording() }
         askAIKey.onReleased = { [weak self] in self?.endAskAIRecording() }
         askAIKey.install()
+
+        pill.onSubmit = { [weak self] in self?.submitHandsFree() }
+        pill.onCancel = { [weak self] in self?.cancelHandsFree() }
 
         showOnboardingIfNeeded()
         honorPendingMicRequest()
@@ -170,29 +196,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         let menu = NSMenu()
-        let state = NSMenuItem(title: "Idle", action: nil, keyEquivalent: "")
-        state.isEnabled = false
-        menu.addItem(state)
-        stateMenuItem = state
 
-        menu.addItem(.separator())
-        menu.addItem(
-            withTitle: "Hold Fn (🌐) or ⌃D to dictate",
+        // One subtle hint line — enough to remind users of the shortcuts
+        // without turning the menu into a manual. Tray icon conveys state.
+        let hint = NSMenuItem(
+            title: "Hold Fn or ⌃D to dictate · ⌃A to ask AI",
             action: nil,
             keyEquivalent: ""
-        ).isEnabled = false
-        menu.addItem(
-            withTitle: "Hold ⌃A to ask AI",
-            action: nil,
-            keyEquivalent: ""
-        ).isEnabled = false
+        )
+        hint.isEnabled = false
+        menu.addItem(hint)
 
         menu.addItem(.separator())
 
         let historyItem = NSMenuItem(
             title: "History…",
             action: #selector(openHistory),
-            keyEquivalent: "y"
+            keyEquivalent: ""
         )
         historyItem.target = self
         menu.addItem(historyItem)
@@ -206,7 +226,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(settingsItem)
 
         let setupItem = NSMenuItem(
-            title: "Setup / Permissions…",
+            title: "Permissions…",
             action: #selector(openOnboarding),
             keyEquivalent: ""
         )
@@ -276,7 +296,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setState(_ text: String, symbol: String) {
-        stateMenuItem?.title = text
+        // `text` is still accepted so callers can stay concise; we only show
+        // it in logs now. The tray icon conveys state to the user; the pill
+        // covers the detailed "Recording…" / "Transcribing…" affordance.
+        _ = text
         statusItem?.button?.image = NSImage(
             systemSymbolName: symbol,
             accessibilityDescription: "Hands-Free"
@@ -317,9 +340,170 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func endDictateRecording() {
-        guard recordingMode == .dictate else { return }
+        guard recordingMode == .dictate || recordingMode == .dictateHandsFree else { return }
         recordingMode = .none
         stopAndTranscribe()
+    }
+
+    // MARK: - Fn double-tap / hands-free gesture
+
+    /// On press we start capturing silently so no audio is lost *if* the user
+    /// ends up holding or double-tapping. We do NOT touch the pill or play any
+    /// sound until the gesture commits — that way a stray single tap is fully
+    /// invisible (no brief pill flash, no chime).
+    private func handleFnDown() {
+        switch fnState {
+        case .idle:
+            fnState = .pressActive
+            startRecorderSilent()
+            // If still held past the tap threshold, promote to visible PTT.
+            fnHoldPromoteTask = Task { [weak self] in
+                let threshold = self?.tapMaxPressDuration ?? 0.25
+                try? await Task.sleep(nanoseconds: UInt64(threshold * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard let self, self.fnState == .pressActive else { return }
+                    self.fnState = .pttActive
+                    self.commitVisiblePTT()
+                }
+            }
+
+        case .releasePending:
+            // Second press inside the inter-tap gap → confirmed double-tap.
+            // The first press's silent recording was discarded on release; we
+            // start a fresh one for the hands-free session.
+            fnReleasePendingTask?.cancel()
+            fnReleasePendingTask = nil
+            startRecorderSilent()
+            fnState = .handsFree
+            ignoreNextFnUp = true    // the release from *this* press isn't a submit
+            commitHandsFreeUI()
+            Log.info("app", "Fn double-tap → hands-free latched")
+
+        case .pressActive, .pttActive, .handsFree:
+            break   // duplicate or mid-gesture — ignore
+        }
+    }
+
+    private func handleFnUp() {
+        switch fnState {
+        case .idle:
+            break
+
+        case .pressActive:
+            // Released before the hold threshold — this was a tap. Drop the
+            // silent recording and watch for a second tap.
+            fnHoldPromoteTask?.cancel()
+            fnHoldPromoteTask = nil
+            discardRecorderSilent()
+            fnState = .releasePending
+            fnReleasePendingTask = Task { [weak self] in
+                let gap = self?.tapMaxInterGap ?? 0.35
+                try? await Task.sleep(nanoseconds: UInt64(gap * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard let self, self.fnState == .releasePending else { return }
+                    // No second tap. Stay fully silent — single taps do nothing.
+                    self.fnState = .idle
+                    self.fnReleasePendingTask = nil
+                }
+            }
+
+        case .pttActive:
+            // Released from a committed hold → normal PTT transcribe path.
+            fnState = .idle
+            endDictateRecording()
+
+        case .releasePending:
+            break   // extra release without a press; ignore
+
+        case .handsFree:
+            if ignoreNextFnUp {
+                ignoreNextFnUp = false
+                return
+            }
+            submitHandsFree()
+        }
+    }
+
+    // MARK: Silent-start helpers (Fn-only split of `startRecording`)
+
+    /// Start the audio engine without touching pill/sound/state. Used to
+    /// speculatively capture audio while we decide whether a Fn press is a
+    /// tap or a hold.
+    private func startRecorderSilent() {
+        guard !isRecording else { return }
+        contextBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        do {
+            try recorder.start()
+            isRecording = true
+        } catch {
+            Log.error("app", "silent start failed: \(error.localizedDescription)")
+            isRecording = false
+        }
+    }
+
+    /// Called once a Fn press clears the tap threshold — now we want the
+    /// normal PTT affordances.
+    private func commitVisiblePTT() {
+        recordingMode = .dictate
+        setState("Recording…", symbol: "waveform")
+        pill.setState(.recording)
+        if Preferences.audioCueMode != .off { SoundEffects.playStart() }
+    }
+
+    /// Called on double-tap confirmation — interactive pill + start cue.
+    private func commitHandsFreeUI() {
+        recordingMode = .dictateHandsFree
+        setState("Recording (hands-free)…", symbol: "waveform")
+        pill.setState(.handsFree)
+        if Preferences.audioCueMode != .off { SoundEffects.playStart() }
+    }
+
+    /// Stop the silent recorder and delete the unfinished file. Does NOT
+    /// touch pill or sound (they were never engaged).
+    private func discardRecorderSilent() {
+        guard isRecording else { return }
+        isRecording = false
+        if let (url, _) = recorder.stop() {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
+    /// User confirmed — stop recording and run the normal transcribe pipeline.
+    private func submitHandsFree() {
+        guard recordingMode == .dictateHandsFree else { return }
+        Log.info("app", "hands-free: submit")
+        fnState = .idle
+        ignoreNextFnUp = false
+        fnReleasePendingTask?.cancel()
+        fnReleasePendingTask = nil
+        recordingMode = .none
+        stopAndTranscribe()
+    }
+
+    /// User hit the X button — stop the recorder and throw away the clip.
+    private func cancelHandsFree() {
+        guard recordingMode == .dictateHandsFree else { return }
+        Log.info("app", "hands-free: cancel")
+        fnState = .idle
+        ignoreNextFnUp = false
+        fnReleasePendingTask?.cancel()
+        fnReleasePendingTask = nil
+        recordingMode = .none
+        discardRecording()
+    }
+
+    /// Stop the recorder without transcribing. Used by hands-free cancel.
+    private func discardRecording() {
+        guard isRecording else { return }
+        isRecording = false
+        if let (url, _) = recorder.stop() {
+            try? FileManager.default.removeItem(at: url)
+        }
+        SoundEffects.stopHum()
+        setState("Idle", symbol: "mic.fill")
+        pill.setState(.hidden)
     }
 
     // MARK: - Recording pipeline

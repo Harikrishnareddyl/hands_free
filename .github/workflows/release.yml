@@ -134,4 +134,4 @@ jobs:
             4. Open **Settings** from the menu-bar mic icon → follow the *Setup guide* to add your Groq API key.
             5. Grant Microphone + Accessibility + (optional) Input Monitoring permissions when prompted.
 
-            Hold **⌃⌥D** or **Fn (🌐)** and speak to dictate.
+            Hold **⌃D** or **Fn (🌐)** and speak to dictate. Hold **⌃A** to ask AI. Double-tap **Fn** for hands-free recording with a clickable pill.

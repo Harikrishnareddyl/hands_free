@@ -18,8 +18,8 @@ struct GroqClient {
         static let gptOss120b  = "openai/gpt-oss-120b"
 
         static let all: [(id: String, label: String)] = [
-            (llama33_70b, "Llama 3.3 70B (default)"),
-            (llama31_8b,  "Llama 3.1 8B (fast)"),
+            (llama33_70b, "Llama 3.3 70B"),
+            (llama31_8b,  "Llama 3.1 8B"),
             (kimiK2,      "Kimi K2"),
             (qwen3_32b,   "Qwen3 32B"),
             (gptOss120b,  "GPT-OSS 120B"),

@@ -23,6 +23,7 @@ struct SettingsView: View {
             askAISection
             soundsSection
             generalSection
+            aboutSection
         }
         .formStyle(.grouped)
         .frame(width: 480)
@@ -107,7 +108,7 @@ struct SettingsView: View {
                     )
             }
 
-            Text("Hold the Ask-AI hotkey, speak your question, release to get a streamed answer in a floating card.")
+            Text("Speak a question, release to get a streamed answer in a floating card.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -139,7 +140,15 @@ struct SettingsView: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Vocabulary hints")
+                HStack {
+                    Text("Vocabulary hints")
+                    Spacer()
+                    if !vocabulary.isEmpty {
+                        Button("Clear") { vocabulary = "" }
+                            .buttonStyle(.borderless)
+                            .font(.caption)
+                    }
+                }
                 TextField("Names, acronyms, technical terms…",
                           text: $vocabulary, axis: .vertical)
                     .lineLimit(2...4)
@@ -160,6 +169,26 @@ struct SettingsView: View {
                     launchAtLogin = LaunchAtLogin.isEnabled  // reflect actual state
                 }
             ))
+        }
+    }
+
+    // MARK: - About
+
+    private var aboutSection: some View {
+        Section {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Hands-Free")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("Version \(UpdateChecker.currentVersion)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Link("GitHub ↗",
+                     destination: URL(string: "https://github.com/Harikrishnareddyl/hands_free")!)
+                    .font(.caption)
+            }
         }
     }
 
