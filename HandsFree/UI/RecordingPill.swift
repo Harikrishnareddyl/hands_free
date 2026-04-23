@@ -1,25 +1,21 @@
 import AppKit
 import SwiftUI
 
-/// Floating borderless panel pinned to the bottom-center of the main screen.
-/// Shows recording/transcribing state. In push-to-talk states the pill is
-/// click-through so it never blocks the app below. In `.handsFree` it becomes
-/// interactive: a Cancel button on the left, the rest of the pill submits.
+/// Floating borderless pill pinned to the bottom-center of the main screen.
+/// Tiny + animation-only: no text, so the pill is small enough to feel like
+/// a macOS HUD instead of a dialog. Click-through in PTT states; interactive
+/// in `.handsFree` (X cancels, body/stop submits).
 @MainActor
 final class RecordingPill {
     enum PillState: Equatable {
         case hidden
         case recording
         case transcribing
-        /// Latched recording after a double-tap. Pill is interactive: tap the
-        /// X to cancel, tap anywhere else to submit.
+        /// Latched recording after a double-tap. Pill is interactive.
         case handsFree
     }
 
-    /// Fired when the user clicks the main body (or the submit icon) while
-    /// the pill is in `.handsFree`.
     var onSubmit: (() -> Void)?
-    /// Fired when the user clicks the X cancel button in `.handsFree`.
     var onCancel: (() -> Void)?
 
     private var panel: NSPanel?
@@ -75,10 +71,13 @@ final class RecordingPill {
         panel?.orderOut(nil)
     }
 
+    /// Kept consistent across states so the pill doesn't jump around. Width
+    /// grows only to accommodate the two extra buttons in hands-free.
     private static func size(for state: PillState) -> NSSize {
+        let height: CGFloat = 24
         switch state {
-        case .handsFree:                 return NSSize(width: 156, height: 34)
-        default:                          return NSSize(width: 130, height: 30)
+        case .handsFree:                 return NSSize(width: 108, height: height)
+        default:                          return NSSize(width: 68,  height: height)
         }
     }
 
@@ -119,15 +118,13 @@ struct PillContent: View {
     let onSubmit: () -> Void
     let onCancel: () -> Void
 
-    @State private var pulse = false
-
     var body: some View {
         Group {
             switch state {
-            case .handsFree:
-                handsFreeBody
-            default:
-                defaultBody
+            case .hidden:       EmptyView()
+            case .recording:    recordingBody
+            case .transcribing: transcribingBody
+            case .handsFree:    handsFreeBody
             }
         }
         .background(
@@ -140,127 +137,143 @@ struct PillContent: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: PTT (recording / transcribing)
+    // MARK: Recording (PTT) — voice-reactive bars with a red accent dot
 
-    private var defaultBody: some View {
-        HStack(spacing: 6) {
-            icon
-            Text(label)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.primary)
+    private var recordingBody: some View {
+        HStack(spacing: 5) {
+            RecordingDot()
+            WaveformBars(barCount: 7, maxHeight: 12, tint: .primary.opacity(0.85))
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 5)
+        .frame(maxHeight: .infinity)
     }
 
-    @ViewBuilder
-    private var icon: some View {
-        switch state {
-        case .recording, .handsFree:
-            Circle()
-                .fill(Color.red)
-                .frame(width: 7, height: 7)
-                .opacity(pulse ? 1.0 : 0.35)
-                .animation(
-                    .easeInOut(duration: 0.75).repeatForever(autoreverses: true),
-                    value: pulse
-                )
-                .onAppear { pulse = true }
-        case .transcribing:
-            ProgressView()
-                .controlSize(.mini)
-                .progressViewStyle(.circular)
-        case .hidden:
-            EmptyView()
-        }
+    // MARK: Transcribing (PTT) — three bouncing dots ("thinking")
+
+    private var transcribingBody: some View {
+        BouncingDots(dotCount: 3, size: 4, tint: .primary.opacity(0.72))
+            .padding(.horizontal, 10)
+            .frame(maxHeight: .infinity)
     }
 
-    private var label: String {
-        switch state {
-        case .recording:    return "Recording…"
-        case .transcribing: return "Transcribing…"
-        case .handsFree:    return "Recording"
-        case .hidden:       return ""
-        }
-    }
+    // MARK: Hands-free — small X · reactive waveform · small stop
 
-    // MARK: Hands-free (latched, interactive)
-
-    /// Compact three-part layout: yellow X cancel · animated waveform · red stop.
-    /// No text — the pill is small enough that the iconography carries it.
-    /// The waveform area is also tappable so "click anywhere in the middle to
-    /// submit" still works; only the X circle cancels.
     private var handsFreeBody: some View {
-        HStack(spacing: 8) {
-            // Cancel (yellow traffic-light-style button)
+        HStack(spacing: 6) {
             Button(action: onCancel) {
                 ZStack {
                     Circle().fill(Color(red: 1.0, green: 0.78, blue: 0.20))
                     Image(systemName: "xmark")
-                        .font(.system(size: 9, weight: .heavy))
-                        .foregroundStyle(Color.black.opacity(0.72))
+                        .font(.system(size: 7, weight: .heavy))
+                        .foregroundStyle(Color.black.opacity(0.75))
                 }
-                .frame(width: 20, height: 20)
+                .frame(width: 16, height: 16)
                 .contentShape(Circle())
             }
             .buttonStyle(.plain)
             .help("Cancel")
 
-            // Animated waveform — also acts as "submit anywhere" hit area.
+            // Tapping the waveform also submits.
             Button(action: onSubmit) {
-                WaveformBars()
-                    .frame(maxWidth: .infinity, maxHeight: 16)
+                WaveformBars(barCount: 7, maxHeight: 12, tint: .primary.opacity(0.85))
+                    .frame(maxWidth: .infinity, maxHeight: 12)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help("Submit")
 
-            // Stop button (submit) — red with white square
             Button(action: onSubmit) {
                 ZStack {
                     Circle().fill(Color.red)
-                    RoundedRectangle(cornerRadius: 1.5)
+                    RoundedRectangle(cornerRadius: 1)
                         .fill(Color.white)
-                        .frame(width: 7, height: 7)
+                        .frame(width: 5.5, height: 5.5)
                 }
-                .frame(width: 20, height: 20)
+                .frame(width: 16, height: 16)
                 .contentShape(Circle())
             }
             .buttonStyle(.plain)
             .help("Submit")
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, 6)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
-// MARK: - Waveform
+// MARK: - Reactive waveform
 
-/// Lightweight audio-style visualization. Bars animate via a single sine sweep
-/// with a phase offset per bar — gives the classic "listening" rhythm without
-/// needing live audio-level taps. Driven by TimelineView so SwiftUI updates
-/// smoothly at ~30 fps without manual state churn.
+/// Vertical bars whose amplitude tracks `AudioLevelMonitor.shared.level`. A
+/// phase-offset sine per bar keeps the motion organic even during silence.
 private struct WaveformBars: View {
-    private let barCount = 10
-    private let minH: CGFloat = 3
-    private let maxH: CGFloat = 16
+    @ObservedObject private var monitor = AudioLevelMonitor.shared
+
+    let barCount: Int
+    let maxHeight: CGFloat
+    let tint: Color
+
+    private let minH: CGFloat = 2
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate
+            // Always keep a small base wiggle so the pill doesn't look frozen
+            // during silence; scale most of the amplitude off the live level.
+            let level = CGFloat(monitor.level)
+            let amp = max(0.12, level)
             HStack(alignment: .center, spacing: 2) {
                 ForEach(0..<barCount, id: \.self) { i in
                     RoundedRectangle(cornerRadius: 1)
-                        .fill(Color.primary.opacity(0.88))
-                        .frame(width: 2.5, height: barHeight(i: i, time: t))
+                        .fill(tint)
+                        .frame(width: 2, height: barHeight(i: i, time: t, amp: amp))
                 }
             }
         }
     }
 
-    private func barHeight(i: Int, time: Double) -> CGFloat {
-        let phase = time * 5.5 + Double(i) * 0.55
-        let norm = (sin(phase) + 1) / 2        // 0..1
-        return minH + (maxH - minH) * CGFloat(norm)
+    private func barHeight(i: Int, time: Double, amp: CGFloat) -> CGFloat {
+        let phase = time * 9 + Double(i) * 0.75
+        let wave = (sin(phase) + 1) / 2                 // 0..1
+        return minH + CGFloat(wave) * amp * (maxHeight - minH)
+    }
+}
+
+// MARK: - Small indicators
+
+private struct RecordingDot: View {
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 20.0)) { timeline in
+            let t = timeline.date.timeIntervalSinceReferenceDate
+            let pulse = 0.6 + (sin(t * 3.8) + 1) / 2 * 0.4   // 0.6..1.0 opacity
+            Circle()
+                .fill(Color.red)
+                .frame(width: 6, height: 6)
+                .opacity(pulse)
+        }
+    }
+}
+
+private struct BouncingDots: View {
+    let dotCount: Int
+    let size: CGFloat
+    let tint: Color
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+            let t = timeline.date.timeIntervalSinceReferenceDate
+            HStack(spacing: 3) {
+                ForEach(0..<dotCount, id: \.self) { i in
+                    Circle()
+                        .fill(tint)
+                        .frame(width: size, height: size)
+                        .scaleEffect(scale(i: i, time: t))
+                }
+            }
+        }
+    }
+
+    private func scale(i: Int, time: Double) -> CGFloat {
+        let phase = time * 3.2 + Double(i) * 0.55
+        let wave = (sin(phase) + 1) / 2
+        return 0.55 + CGFloat(wave) * 0.55
     }
 }

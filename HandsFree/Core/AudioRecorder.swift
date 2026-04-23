@@ -90,6 +90,8 @@ final class AudioRecorder {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
 
+        Task { @MainActor in AudioLevelMonitor.shared.reset() }
+
         let duration = startedAt.map { Date().timeIntervalSince($0) } ?? 0
         startedAt = nil
 
@@ -137,5 +139,30 @@ final class AudioRecorder {
         if output.frameLength == 0 { return }
 
         try? writer.append(output)
+        publishLevel(from: output)
+    }
+
+    /// Compute a 0…1 loudness level from the int16 mono buffer and push it to
+    /// `AudioLevelMonitor` so the recording pill can react visually. Speech
+    /// RMS is typically 0.02…0.20 in linear scale; we apply a mild power curve
+    /// plus scaling so quiet speech still moves the waveform meaningfully.
+    private func publishLevel(from buffer: AVAudioPCMBuffer) {
+        guard let channelData = buffer.int16ChannelData else { return }
+        let n = Int(buffer.frameLength)
+        guard n > 0 else { return }
+
+        let ptr = channelData[0]
+        var sum: Double = 0
+        for i in 0..<n {
+            let s = Double(ptr[i]) / 32768.0
+            sum += s * s
+        }
+        let rms = Float(sqrt(sum / Double(n)))
+        // sqrt curve feels more responsive at low levels than raw RMS.
+        let shaped = min(1.0, sqrt(rms) * 1.8)
+
+        Task { @MainActor in
+            AudioLevelMonitor.shared.update(shaped)
+        }
     }
 }
