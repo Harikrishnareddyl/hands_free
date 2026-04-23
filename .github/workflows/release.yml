@@ -65,8 +65,12 @@ jobs:
 
             1. Download `HandsFree-${{ steps.version.outputs.version }}.dmg` below.
             2. Open it and drag **HandsFree** into your **Applications** folder.
-            3. Launch HandsFree from Applications. macOS will warn that it's from an "unidentified developer" because this build isn't notarized — right-click the app → **Open** → **Open** again. You only need to do this once.
-            4. Open **Settings** from the menu-bar icon → follow the "Setup guide" to configure your Groq API key.
+            3. **First-launch gatekeeper bypass** (needed because this release isn't notarized):
+               ```bash
+               xattr -dr com.apple.quarantine /Applications/HandsFree.app
+               ```
+               Then double-click HandsFree normally. Or, via GUI: when the block dialog appears, click **Done**, open **System Settings → Privacy & Security**, scroll to **Security**, click **Open Anyway** for HandsFree, enter your password.
+            4. Open **Settings** from the menu-bar mic icon → follow the *Setup guide* to add your Groq API key.
             5. Grant Microphone + Accessibility + (optional) Input Monitoring permissions when prompted.
 
             Hold **⌃⌥D** or **Fn (🌐)** and speak to dictate.

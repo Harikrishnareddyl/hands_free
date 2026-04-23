@@ -33,9 +33,18 @@ Open-source alternative to [Wispr Flow](https://wisprflow.ai), [Superwhisper](ht
 
 1. Download the latest **`HandsFree-X.Y.Z.dmg`** from the [Releases](https://github.com/Harikrishnareddyl/hands_free/releases) page.
 2. Open the DMG and drag **HandsFree** into **Applications**.
-3. Launch from `/Applications`. macOS will block it with *"HandsFree can't be opened because Apple cannot check it for malicious software"* — this build isn't notarized because I don't have a paid Apple Developer account. To bypass:
-   - **Right-click** `HandsFree` in `/Applications` → **Open** → **Open** in the confirmation dialog.
-   - You only need to do this once.
+3. Launch from `/Applications`. macOS will block it with *"HandsFree can't be opened because Apple cannot check it for malicious software"* — the release isn't notarized because I don't have a paid Apple Developer account. Bypass it **once**, one of two ways:
+
+   **One-line Terminal command** (easiest, especially on macOS 15 Sequoia):
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/HandsFree.app
+   ```
+   Then double-click HandsFree normally.
+
+   **Or via GUI:**
+   - Click **Done** in the block dialog (don't hit *Move to Trash*).
+   - Open **System Settings → Privacy & Security**, scroll to **Security** at the bottom, click **Open Anyway** next to the HandsFree notice, and enter your password. (On macOS 14 and earlier, right-click → *Open* → *Open* in Applications also works; macOS 15+ removed that shortcut for unnotarized apps.)
+
 4. The microphone icon appears in your menu bar.
 
 ## First-run setup
