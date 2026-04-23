@@ -55,7 +55,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         showOnboardingIfNeeded()
         honorPendingMicRequest()
+        startPermissionWatcher()
         checkForUpdatesInBackground()
+    }
+
+    // MARK: - Runtime permission watcher
+
+    private var permissionTimer: Timer?
+
+    /// Polls required permissions every 10 s. If any of them drops from
+    /// granted → not granted while the app is running (e.g. the user revoked
+    /// Microphone in System Settings), re-open the onboarding so they know
+    /// what broke instead of silently failing next dictation.
+    private func startPermissionWatcher() {
+        permissionTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.checkRuntimePermissions() }
+        }
+    }
+
+    private func checkRuntimePermissions() {
+        guard !requiredPermissionsGranted else { return }
+        guard !windows.isOnboardingVisible else { return }
+        Log.info("app", "watcher: required permission missing mid-run, reopening onboarding")
+        presentOnboarding()
     }
 
     /// If the onboarding set the auto-request flag before relaunching us,
@@ -619,17 +641,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             try task.run()
             task.waitUntilExit()
-            if task.terminationStatus == 0 {
-                showNotification(
-                    title: "Accessibility reset",
-                    body: "Quit & relaunch HandsFree, then click Allow on the prompt."
-                )
-            } else {
-                showError("tccutil exited with code \(task.terminationStatus)")
-            }
+            Log.info("app", "tccutil reset Accessibility exit=\(task.terminationStatus)")
         } catch {
+            Log.error("app", "tccutil failed: \(error.localizedDescription)")
             showError("tccutil failed: \(error.localizedDescription)")
+            return
         }
+        // The running process's Accessibility cache is stale the moment tccutil
+        // reset writes. Only a fresh process will see the updated state, so
+        // relaunch — the onboarding will re-open on next launch if anything's
+        // still missing.
+        AppRelaunch.quitAndRestart()
     }
 
     @objc private func copyDiagnostics() {

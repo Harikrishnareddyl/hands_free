@@ -61,6 +61,12 @@ final class WindowCoordinator {
         onboardingWindow = nil
     }
 
+    /// `true` while the onboarding window is on screen. Used by the runtime
+    /// permission watcher to avoid opening duplicates.
+    var isOnboardingVisible: Bool {
+        onboardingWindow?.isVisible ?? false
+    }
+
     // MARK: - Helpers
 
     private func activate(_ window: NSWindow) {

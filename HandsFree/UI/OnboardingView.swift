@@ -212,26 +212,7 @@ struct OnboardingView: View {
         UserDefaults.standard.set(true, forKey: "autoRequestMicOnNextLaunch")
         UserDefaults.standard.synchronize()
         Log.info("onboarding", "quitting so AVCaptureDevice re-initializes; mic prompt will fire on relaunch")
-        Self.relaunchSelf()
-    }
-
-    /// Spawns a detached `open` that waits 1s then relaunches us, then quits.
-    private static func relaunchSelf() {
-        let appPath = Bundle.main.bundlePath
-        let cmd = "(sleep 1 && open \"\(appPath)\") >/tmp/handsfree-relaunch.log 2>&1 </dev/null & disown"
-        let task = Process()
-        task.launchPath = "/bin/bash"
-        task.arguments = ["-c", cmd]
-        task.standardInput = Pipe()
-        do {
-            try task.run()
-            task.waitUntilExit()
-        } catch {
-            Log.error("onboarding", "relaunch spawn failed: \(error.localizedDescription)")
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            NSApp.terminate(nil)
-        }
+        AppRelaunch.quitAndRestart()
     }
 
     /// Resets the Microphone TCC entry for this bundle, forcing the next

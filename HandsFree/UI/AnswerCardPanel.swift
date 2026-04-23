@@ -68,7 +68,8 @@ final class AnswerCardPanel {
             hosting.rootView = rootView
         } else {
             let newHosting = NSHostingView(rootView: rootView)
-            newHosting.frame = NSRect(x: 0, y: 0, width: 420, height: 260)
+            newHosting.frame = NSRect(x: 0, y: 0, width: 440, height: 280)
+            newHosting.autoresizingMask = [.width, .height]
             hosting = newHosting
         }
 
@@ -87,7 +88,7 @@ final class AnswerCardPanel {
 
     private func makePanel(hosting: NSView) -> NSPanel {
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 260),
+            contentRect: NSRect(x: 0, y: 0, width: 440, height: 280),
             styleMask: [.borderless, .nonactivatingPanel, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
