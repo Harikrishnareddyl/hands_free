@@ -21,3 +21,5 @@ HandsFree/Resources/AppIcon.iconset/
 
 # Local secrets
 .groq-key
+
+.env
