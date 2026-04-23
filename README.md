@@ -28,6 +28,7 @@ Open-source alternative to [Wispr Flow](https://wisprflow.ai), [Superwhisper](ht
 - 🔐 API key lives in a user-only file (`mode 0600`) — no Keychain prompts
 - 🚀 Launch at login
 - 🌍 100+ languages (Whisper auto-detects)
+- 🔄 Checks GitHub on launch for updates — one click reinstalls the latest release
 
 ## Install
 
@@ -58,6 +59,8 @@ Downloads the latest DMG, installs `HandsFree` into `/Applications`, strips the 
 4. The microphone icon appears in your menu bar.
 
 ## First-run setup
+
+On every launch, HandsFree checks whether it has the three **required** permissions — **Microphone**, **Accessibility**, and a **Groq API key**. If any of them is missing, a setup window appears that you can't continue past until they're granted (or you hit **Quit**). Once everything's green, click **Continue** and the app runs normally. You can reopen the window anytime from the menu bar → **Setup / Permissions…**.
 
 ### 1. Add your Groq API key
 
@@ -116,6 +119,12 @@ Three options under **Settings → Sounds**:
 - **Off** — silent
 - **Start / end chimes only** — ascending tone on record, descending tone on delivery
 - **Chimes + processing tick** — adds a subtle tick every 1.5s while Groq is thinking
+
+## Updates
+
+HandsFree hits the GitHub Releases API on launch to check whether a newer version is available. If one is, you'll see an alert with **Install update** / **Release notes** / **Later**. Clicking **Install update** runs the same `install.sh` flow in the background, quits the old app, and relaunches the new version. Your settings, history DB, and Groq API key all live outside the bundle so they survive upgrades untouched.
+
+You can also trigger a check anytime: menu bar → **Check for Updates…**
 
 ## Cost
 

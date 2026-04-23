@@ -26,9 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = HistoryStore.shared                 // warm up DB
         recorder.prepareEngine()                // warm up audio hardware
         setupStatusItem()
-        requestMicAccess()
         requestNotificationAccess()
-        requestAccessibilityIfNeeded()
         logPermissionSnapshot()
 
         hotKey.onPressed = { [weak self] in self?.startRecording() }
@@ -37,19 +35,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         fnKey.onPressed = { [weak self] in self?.startRecording() }
         fnKey.onReleased = { [weak self] in self?.stopAndTranscribe() }
-        tryInstallFn()
+        _ = fnKey.install()   // silent attempt; onboarding handles the UX if it fails
+
+        showOnboardingIfNeeded()
+        checkForUpdatesInBackground()
     }
 
-    private func tryInstallFn() {
-        if fnKey.install() {
-            Log.info("app", "Fn tap installed")
+    // MARK: - Update check
+
+    private func checkForUpdatesInBackground() {
+        Task { @MainActor in
+            guard let info = await UpdateChecker.fetchLatest() else { return }
+            guard !UpdateChecker.wasDismissed(info) else {
+                Log.info("update", "\(info.latestVersion) was dismissed earlier; skipping auto-prompt")
+                return
+            }
+            UpdateChecker.presentAlert(for: info)
+        }
+    }
+
+    // MARK: - Onboarding gate
+
+    private var requiredPermissionsGranted: Bool {
+        AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+            && FocusInspector.isAccessibilityTrusted()
+            && Secrets.groqAPIKey() != nil
+    }
+
+    private func showOnboardingIfNeeded() {
+        guard !requiredPermissionsGranted else {
+            Log.info("app", "all required permissions granted; skipping onboarding")
             return
         }
-        Log.error("app", "Fn tap failed — Input Monitoring not granted yet")
-        showNotification(
-            title: "Enable Input Monitoring for Fn key",
-            body: "System Settings → Privacy & Security → Input Monitoring → turn on HandsFree. Then menu-bar → Retry Fn key setup."
+        Log.info("app", "required permissions missing; showing onboarding")
+        presentOnboarding()
+    }
+
+    private func presentOnboarding() {
+        let view = OnboardingView(
+            checkInputMonitoring: { [weak self] in self?.fnKey.isInstalled ?? false },
+            onTryInstallFn: { [weak self] in self?.grantInputMonitoring() },
+            onOpenAPIKeySetup: { [weak self] in self?.windows.showSettings() },
+            onContinue: { [weak self] in
+                guard let self else { return }
+                if self.requiredPermissionsGranted {
+                    self.windows.closeOnboarding()
+                } else {
+                    Log.error("app", "onContinue called but permissions still missing — ignoring")
+                }
+            },
+            onQuit: {
+                Log.info("app", "user quit from onboarding")
+                NSApp.terminate(nil)
+            }
         )
+        windows.showOnboarding(view: view)
+    }
+
+    private func grantInputMonitoring() {
+        // Try to install first (succeeds silently if already granted).
+        if fnKey.install() { return }
         FnHotKeyMonitor.openInputMonitoringPreferences()
     }
 
@@ -92,6 +137,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         settingsItem.target = self
         menu.addItem(settingsItem)
+
+        let setupItem = NSMenuItem(
+            title: "Setup / Permissions…",
+            action: #selector(openOnboarding),
+            keyEquivalent: ""
+        )
+        setupItem.target = self
+        menu.addItem(setupItem)
+
+        let updateItem = NSMenuItem(
+            title: "Check for Updates…",
+            action: #selector(checkForUpdatesManual),
+            keyEquivalent: ""
+        )
+        updateItem.target = self
+        menu.addItem(updateItem)
 
         menu.addItem(.separator())
 
@@ -308,6 +369,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openHistory() {
         windows.showHistory()
+    }
+
+    @objc private func openOnboarding() {
+        presentOnboarding()
+    }
+
+    @objc private func checkForUpdatesManual() {
+        Task { @MainActor in
+            guard let info = await UpdateChecker.fetchLatest() else {
+                let alert = NSAlert()
+                alert.messageText = "You're up to date"
+                alert.informativeText = "HandsFree \(UpdateChecker.currentVersion) is the latest release."
+                alert.runModal()
+                return
+            }
+            UpdateChecker.presentAlert(for: info)
+        }
     }
 
     @objc private func runThreeSecondTest() {
