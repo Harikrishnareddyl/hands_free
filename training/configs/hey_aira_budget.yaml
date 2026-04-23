@@ -1,0 +1,141 @@
+# Budget config for the "Hey Aira" wake-word model. Full LiveKit-reference
+# production settings (100k Phase-1 steps, 25k positive samples), with two
+# speed tweaks that preserve quality:
+#   - augmentation.rounds: 1 (default in the schema; prod.yaml uses 3)
+#   - tts_batch_size: 200 (up from 100 — fits on L40S 48 GB VRAM)
+# And a critical reuse: we resume from the `augment` stage, reusing the
+# 50k TTS clips already generated in the previous cancelled run. Expected
+# wall-clock: ~3–4 h on L40S + 16 CPU, ~$5.50–8 in Modal credits.
+#
+# A second target phrase ("aira" alone) would require a fresh `generate`
+# pass — adversarial negatives are synthesized per phrase — which pushes
+# the run to ~$9–13. Leaving that as a follow-up retrain.
+
+model_name: hey_aira
+target_phrases: ["hey aira"]
+
+# ============================================================================
+# Data generation
+# ============================================================================
+
+n_samples: 25000
+n_samples_val: 5000
+n_background_samples: 2000
+n_background_samples_val: 500
+
+# 200 fits comfortably on L40S (48 GB VRAM) and halves generate-phase time.
+tts_batch_size: 200
+
+# Two-tier negative list: phrases that sound like "hey aira" (same list as
+# the single-phrase config) PLUS unprefixed decoys for when the user says
+# just "aira". Single-word wake words pick up more phonetic neighbors, so
+# this list is intentionally broader.
+custom_negative_phrases:
+  # — Bare target without the "hey" prefix — the biggest false trigger —
+  - "aira"
+  - "ayra"
+  - "aera"
+  # — Phonetically adjacent "hey X" phrases (existing) —
+  - "hey era"
+  - "hey ira"
+  - "hey sarah"
+  - "hey tara"
+  - "hey laura"
+  - "hey clara"
+  - "hey kara"
+  - "hey mira"
+  - "hey ada"
+  - "hey ana"
+  - "hey air"
+  - "hey hair"
+  - "hey area"
+  - "hey arrow"
+  - "hey aura"
+  - "hey arya"
+  - "play era"
+  - "they are"
+  # — Common two-word English neighbors —
+  - "hey there"
+  - "hi there"
+  # — Other voice assistants (don't want cross-fires) —
+  - "hey siri"
+  - "hey alexa"
+  - "hey google"
+  - "ok google"
+  # — Option-B additions: common women's first names that rhyme with or
+  # share onset with "aira" (highest false-trigger risk category) —
+  - "hey emma"
+  - "hey ella"
+  - "hey ellie"
+  - "hey ellen"
+  - "hey elena"
+  - "hey emily"
+  - "hey amelia"
+  - "hey amber"
+  - "hey anna"
+  - "hey erin"
+  - "hey erica"
+  - "hey aaron"
+  # — Short words containing the "-air-" / "-era-" phoneme cluster —
+  - "error"
+  - "airport"
+  - "eraser"
+
+# ============================================================================
+# Paths — Modal entrypoint rewrites these to point at the mounted volumes.
+# ============================================================================
+
+data_dir: ./data
+output_dir: ./output
+
+# ============================================================================
+# Augmentation
+# ============================================================================
+
+augmentation:
+  clip_duration: 2.0
+  batch_size: 64
+  # rounds: 3 matches LiveKit's prod.yaml — each round stacks more
+  # augmentation on the previous round's output, giving the classifier
+  # compound noise+reverb+distortion diversity. Cheap now that we have
+  # the parallel patch (~5 min per round × 3 rounds = ~15 min).
+  rounds: 3
+  background_paths: [./data/backgrounds]
+  rir_paths: [./data/rirs]
+
+# ============================================================================
+# Model architecture — must match the LiveKit Swift runtime.
+# ============================================================================
+
+model:
+  model_type: conv_attention
+  model_size: medium
+
+# ============================================================================
+# Training — 100k Phase-1 steps matches LiveKit's prod.yaml exactly. Phases
+# 2 and 3 scale from this (steps // 10 each → 10k + 10k), for a total of
+# ~120k steps.
+# ============================================================================
+
+steps: 100000
+learning_rate: 0.0001
+weight_decay: 0.01
+label_smoothing: 0.05
+# Start at 6000 instead of the default 3000 — the previous run's trainer
+# auto-doubled from 3000 → 6000 → 12000 over phases 2 and 3 anyway, and
+# starting higher lets Phases 2+3 escalate further (to ~24000) rather than
+# burning their 10k steps just catching up to where Phase 1 should have
+# ended. Only meaningful on a retrain; fresh runs should use 3000.
+max_negative_weight: 6000
+target_fp_per_hour: 0.1
+
+batch_n_per_class:
+  positive: 50
+  adversarial_negative: 50
+  ACAV100M_sample: 1024
+  background_noise: 50
+
+noise_scales: [0.98]
+noise_scale_ws: [0.98]
+length_scales: [0.75, 1.0, 1.25]
+slerp_weights: [0.2, 0.35, 0.5, 0.65, 0.8]

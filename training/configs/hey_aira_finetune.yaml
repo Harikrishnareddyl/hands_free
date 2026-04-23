@@ -1,0 +1,131 @@
+# Fine-tune config: produces a "Hey Aira" model that actually works on
+# YOUR voice. Runs the full pipeline, but the user's ~120 recorded clips
+# get injected into positive_train/ after generate — so training sees
+# both synthetic TTS voices AND your actual voice from your actual mic.
+#
+# Key differences from hey_aira_budget.yaml:
+#   - max_negative_weight: 1500 (was 3000)  → let confidence scores climb
+#                                              higher when your voice says the
+#                                              phrase; previous high value was
+#                                              what caused v1 to output 0.08
+#                                              instead of 0.8+ on your voice.
+#   - steps: 60000 (was 100000)              → real-voice positives anchor
+#                                              training faster than synthetic-
+#                                              only runs need.
+#   - rounds: 2 (was 1)                      → slightly more augmentation
+#                                              diversity — cheap with parallel
+#                                              patches, good for robustness.
+#
+# Expected wall-clock on L40S + 32 CPU: ~50–75 min. Expected cost: ~$3–4.
+
+model_name: hey_aira
+target_phrases: ["hey aira"]
+
+# ============================================================================
+# Data generation (TTS synthesizes synthetic positives; user clips added
+# on top of these by the Modal entrypoint after generate finishes)
+# ============================================================================
+
+n_samples: 25000
+n_samples_val: 5000
+n_background_samples: 2000
+n_background_samples_val: 500
+
+tts_batch_size: 200
+
+custom_negative_phrases:
+  - "aira"
+  - "ayra"
+  - "aera"
+  - "hey era"
+  - "hey ira"
+  - "hey sarah"
+  - "hey tara"
+  - "hey laura"
+  - "hey clara"
+  - "hey kara"
+  - "hey mira"
+  - "hey ada"
+  - "hey ana"
+  - "hey air"
+  - "hey hair"
+  - "hey area"
+  - "hey arrow"
+  - "hey aura"
+  - "hey arya"
+  - "play era"
+  - "they are"
+  - "hey there"
+  - "hi there"
+  - "hey siri"
+  - "hey alexa"
+  - "hey google"
+  - "ok google"
+  - "hey emma"
+  - "hey ella"
+  - "hey ellie"
+  - "hey ellen"
+  - "hey elena"
+  - "hey emily"
+  - "hey amelia"
+  - "hey amber"
+  - "hey anna"
+  - "hey erin"
+  - "hey erica"
+  - "hey aaron"
+  - "error"
+  - "airport"
+  - "eraser"
+
+# ============================================================================
+# Paths
+# ============================================================================
+
+data_dir: ./data
+output_dir: ./output
+
+# ============================================================================
+# Augmentation — rounds=2 gives real-voice clips two stacked augmentation
+# passes (noise + reverb + SNR variation), which helps the model generalize
+# from your clean recordings to noisy real use.
+# ============================================================================
+
+augmentation:
+  clip_duration: 2.0
+  batch_size: 64
+  rounds: 2
+  background_paths: [./data/backgrounds]
+  rir_paths: [./data/rirs]
+
+# ============================================================================
+# Model architecture — must match the LiveKit Swift runtime.
+# ============================================================================
+
+model:
+  model_type: conv_attention
+  model_size: medium
+
+# ============================================================================
+# Training — the important change is max_negative_weight dropping to 1500
+# from 3000. With real-voice anchoring the positive class, we can afford to
+# let the classifier produce confident outputs without the adaptive weight
+# escalation that made v1 output scores of 0.08 on your actual voice.
+# ============================================================================
+
+steps: 60000
+learning_rate: 0.0001
+weight_decay: 0.01
+label_smoothing: 0.05
+max_negative_weight: 1500
+target_fp_per_hour: 0.5
+
+batch_n_per_class:
+  positive: 50
+  adversarial_negative: 50
+  ACAV100M_sample: 1024
+  background_noise: 50
+
+noise_scales: [0.98]
+noise_scale_ws: [0.98]
+length_scales: [0.75, 1.0, 1.25]
+slerp_weights: [0.2, 0.35, 0.5, 0.65, 0.8]

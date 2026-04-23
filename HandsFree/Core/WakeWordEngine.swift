@@ -14,18 +14,23 @@ final class WakeWordEngine: @unchecked Sendable {
     /// Filename (without extension) of the classifier .onnx bundled in
     /// `Resources/`. Swap this (and update `wakePhrase`) to ship a different
     /// wake word — no other code changes required.
-    static let bundledClassifierName = "hey_livekit"
+    // static let bundledClassifierName = "hey_livekit"
+    static let bundledClassifierName = "hey_aira"
     /// User-facing label for the bundled wake word.
-    static let wakePhrase = "Hey LiveKit"
+    // static let wakePhrase = "Hey LiveKit"
+    static let wakePhrase = "Hey Aira"
 
     /// Called on the main actor when the wake word fires above threshold.
     var onDetected: (() -> Void)?
 
     // MARK: - Tuning
 
-    /// Confidence above which we treat it as a real detection. LiveKit's
-    /// example uses 0.75; we start there and can tune per telemetry.
-    private let triggerThreshold: Float = 0.75
+    /// Confidence above which we treat it as a real detection. Read from
+    /// `Preferences.wakeWordThreshold` on every prediction so the Settings
+    /// slider takes effect immediately without restarting the engine.
+    private var triggerThreshold: Float {
+        Float(Preferences.wakeWordThreshold)
+    }
     /// After a detection, suppress further triggers for this long. Avoids
     /// re-firing from the tail of the same utterance.
     private let debounceSeconds: TimeInterval = 2.0
@@ -39,6 +44,9 @@ final class WakeWordEngine: @unchecked Sendable {
     // MARK: - State
 
     private var model: WakeWordModel?
+    /// The execution provider the cached `model` was built with. We rebuild
+    /// the model if the user changes this via Settings.
+    private var modelProvider: Preferences.WakeWordExecutionProvider?
     private var engine: AVAudioEngine?
     private let workQueue = DispatchQueue(
         label: "com.lakkireddylabs.HandsFree.wakeword",
@@ -55,6 +63,14 @@ final class WakeWordEngine: @unchecked Sendable {
 
     private(set) var isRunning = false
 
+    /// The execution provider currently in effect (matches the cached model,
+    /// or — if the model hasn't been built yet — the one we'll build next).
+    /// Used by `AppDelegate` to decide whether to cycle the engine after a
+    /// preference change.
+    var activeProvider: Preferences.WakeWordExecutionProvider {
+        modelProvider ?? Preferences.wakeWordExecutionProvider
+    }
+
     // MARK: - Lifecycle
 
     /// Start listening. Silently no-ops if already running. Throws if the
@@ -63,7 +79,8 @@ final class WakeWordEngine: @unchecked Sendable {
     func start() throws {
         guard !isRunning else { return }
 
-        if model == nil {
+        let desiredProvider = Preferences.wakeWordExecutionProvider
+        if model == nil || modelProvider != desiredProvider {
             guard let url = Bundle.main.url(
                 forResource: Self.bundledClassifierName,
                 withExtension: "onnx"
@@ -77,8 +94,10 @@ final class WakeWordEngine: @unchecked Sendable {
             model = try WakeWordModel(
                 models: [url],
                 sampleRate: WakeWordModel.modelSampleRate,
-                executionProvider: .coreML
+                executionProvider: desiredProvider.ortProvider
             )
+            modelProvider = desiredProvider
+            Log.info("wake", "model built with provider=\(desiredProvider.rawValue)")
         }
 
         let engine = AVAudioEngine()
@@ -254,6 +273,17 @@ final class WakeWordEngine: @unchecked Sendable {
             }
         } catch {
             Log.error("wake", "predict failed: \(error.localizedDescription)")
+        }
+    }
+}
+
+private extension Preferences.WakeWordExecutionProvider {
+    var ortProvider: ExecutionProvider {
+        switch self {
+        case .coreML:          return .coreML
+        case .coreMLCPUAndGPU: return .coreMLCPUAndGPU
+        case .coreMLCPUOnly:   return .coreMLCPUOnly
+        case .cpu:             return .cpu
         }
     }
 }

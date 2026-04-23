@@ -131,6 +131,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         } else if !wantListening && wakeWord.isRunning {
             wakeWord.stop()
+        } else if wantListening && wakeWord.isRunning,
+                  wakeWord.activeProvider != Preferences.wakeWordExecutionProvider {
+            // Provider changed while running — cycle so the model rebuilds
+            // with the new execution provider on next start.
+            Log.info("app", "wake word: provider changed, cycling engine")
+            wakeWord.stop()
+            do {
+                try wakeWord.start()
+            } catch {
+                Log.error("app", "wake word restart after provider change failed: \(error.localizedDescription)")
+            }
         }
     }
 

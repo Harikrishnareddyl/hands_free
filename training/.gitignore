@@ -6,3 +6,10 @@ output/
 __pycache__/
 *.pyc
 .venv/
+
+# Voice recording work — raw takes and split clips stay local. We upload
+# them to Modal for fine-tuning, not to git.
+voice/raw/
+voice/clips/
+!voice/raw/.gitkeep
+!voice/clips/.gitkeep

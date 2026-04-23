@@ -52,11 +52,14 @@ app = modal.App(APP_NAME)
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
+    # Matches LiveKit's upstream SkyPilot reference (skypilot/train.yaml) —
+    # these are the deps their augment/generate pipeline actually needs.
     .apt_install(
         "espeak-ng",       # phonemizer used by Piper VITS
         "ffmpeg",          # audio I/O
-        "portaudio19-dev", # pulled in by the listener extra (harmless here)
+        "sox",             # used by the augment-phase DSP chain
         "libsndfile1",     # soundfile backend
+        "portaudio19-dev", # pulled in by the listener extra (harmless here)
         "git",             # pip needs it to clone the LiveKit repo
         "curl",
     )
@@ -74,6 +77,16 @@ image = (
     .run_commands(
         "python -m nltk.downloader -d /usr/share/nltk_data cmudict averaged_perceptron_tagger",
     )
+    # Ship our parallel-augmentation patch into the image. The upstream
+    # `_augment_directory` in livekit-wakeword is a single-threaded Python
+    # loop; `patches/parallel_augment.py` monkey-patches it with a
+    # `multiprocessing.Pool` version so the 32-CPU allocation actually
+    # earns its keep (10–20× real speedup).
+    .add_local_file(
+        "training/patches/parallel_augment.py",
+        remote_path="/patches/parallel_augment.py",
+        copy=True,
+    )
 )
 
 cache_volume = modal.Volume.from_name(CACHE_VOLUME, create_if_missing=True)
@@ -89,12 +102,33 @@ OUTPUT_MOUNT = "/output"
 
 @app.function(
     image=image,
-    gpu="A100-40GB",
+    # L40S matches LiveKit's own skypilot/train.yaml reference. It's Ada
+    # Lovelace (newer than A100 Ampere), often faster for small models, and
+    # priced similarly on Modal. Override with gpu="A100-40GB" or "A10G" if
+    # you have a reason.
+    gpu="L40S",
+    # Critical: Modal's default is ~0.125 cores, which starves the augment
+    # phase (all-CPU audio DSP: reverb, SNR, mixing) and wastes GPU-hours
+    # sitting idle. LiveKit's reference requests 8+; 32 cuts augment time
+    # roughly in half vs 16 with negligible extra cost.
+    cpu=32.0,
+    # 48 GiB gives 1.5 GiB per core — plenty for parallel audio workers
+    # during augmentation without hitting Modal's default memory cap.
+    memory=48 * 1024,
+    # (No ephemeral_disk override — Modal's default is plenty because both
+    # the 16 GB dataset cache and all run outputs live on persistent
+    # Volumes, not the container's scratch disk. Setting ephemeral_disk
+    # requires a 512 GiB minimum per Modal's API, which we don't need.)
     volumes={CACHE_MOUNT: cache_volume, OUTPUT_MOUNT: output_volume},
-    # Leave a fat margin — a cold production run is ~14 h.
+    # Leave a fat margin — a cold production run is ~6 h on L40S + 16 CPU.
     timeout=60 * 60 * 20,
 )
-def train(config_yaml: str, run_setup: bool = True) -> str:
+def train(
+    config_yaml: str,
+    run_setup: bool = True,
+    resume_from: str = "generate",
+    inject_user_clips: bool = False,
+) -> str:
     """Execute the full training pipeline on Modal.
 
     ``config_yaml`` is the *contents* of the YAML file (not a path), so the
@@ -147,8 +181,33 @@ def train(config_yaml: str, run_setup: bool = True) -> str:
         else:
             print("[hey-aira] setup: cache already populated, skipping download")
 
-    # Full pipeline in one shot: generate → augment → train → export → eval.
-    _run(["livekit-wakeword", "run", str(config_path)])
+    # Pipeline stages. `resume_from` lets a caller skip earlier stages when
+    # a prior run already produced those artifacts on the /output volume —
+    # e.g. resume_from="augment" reuses the generated TTS clips from a
+    # cancelled run and only reruns augment/train/export/eval.
+    stages = ["generate", "augment", "train", "export", "eval"]
+    if resume_from not in stages:
+        raise ValueError(
+            f"resume_from must be one of {stages}, got {resume_from!r}"
+        )
+    skip_until = stages.index(resume_from)
+    for stage in stages[skip_until:]:
+        print(f"[hey-aira] stage: {stage}")
+        if stage == "augment":
+            # If fine-tuning, copy the user voice clips (uploaded via
+            # `modal volume put hey-aira-output training/voice/clips user_clips`)
+            # into positive_train/ at indices starting after the synthetic set,
+            # RIGHT BEFORE augment runs so they pick up the parallel DSP
+            # pipeline + feature extraction identically to the synthetic ones.
+            if inject_user_clips:
+                _inject_user_clips(model_name)
+                output_volume.commit()
+
+            # Use our monkey-patched, multiprocessing-pool version instead
+            # of the single-threaded upstream CLI.
+            _run(["python", "/patches/parallel_augment.py", str(config_path)])
+        else:
+            _run(["livekit-wakeword", stage, str(config_path)])
 
     onnx_src = pathlib.Path(OUTPUT_MOUNT) / model_name / f"{model_name}.onnx"
     if not onnx_src.exists():
@@ -174,15 +233,58 @@ def train(config_yaml: str, run_setup: bool = True) -> str:
 
 
 @app.local_entrypoint()
-def run(config: str = "training/configs/hey_aira.yaml", skip_setup: bool = False):
-    """Kick off a training run. `config` is a path on your local machine."""
+def run(
+    config: str = "training/configs/hey_aira.yaml",
+    skip_setup: bool = False,
+    resume_from: str = "generate",
+):
+    """Kick off a training run. `config` is a path on your local machine.
+
+    `resume_from` defaults to "generate" (run the full pipeline). Set it to
+    "augment" to reuse TTS clips from a cancelled prior run, or later
+    stages ("train", "export", "eval") to resume even further along.
+    """
     config_path = pathlib.Path(config)
     if not config_path.exists():
         raise SystemExit(f"config not found: {config_path}")
     yaml_text = config_path.read_text()
-    remote_path = train.remote(yaml_text, run_setup=not skip_setup)
+    remote_path = train.remote(
+        yaml_text,
+        run_setup=not skip_setup,
+        resume_from=resume_from,
+    )
     print(f"\nFinished. Remote path: {remote_path}")
     print("Run `modal run training/modal_train.py::fetch` to download it.")
+
+
+@app.local_entrypoint()
+def finetune(
+    config: str = "training/configs/hey_aira_finetune.yaml",
+    skip_setup: bool = False,
+):
+    """Full-pipeline training with your voice clips added as positives.
+
+    Pre-requisite: run
+        modal volume put hey-aira-output training/voice/clips user_clips
+
+    once to upload the clips from training/voice/clips/ onto the Modal
+    `hey-aira-output` volume at `/output/user_clips/`. This entrypoint then
+    copies them into positive_train/ at indices 25000+ right before the
+    augment stage, so they get augmented + feature-extracted alongside the
+    synthetic TTS positives.
+    """
+    config_path = pathlib.Path(config)
+    if not config_path.exists():
+        raise SystemExit(f"config not found: {config_path}")
+    yaml_text = config_path.read_text()
+    remote_path = train.remote(
+        yaml_text,
+        run_setup=not skip_setup,
+        resume_from="generate",
+        inject_user_clips=True,
+    )
+    print(f"\nFinished. Remote path: {remote_path}")
+    print("Run `./training/fetch_model.sh` to download it into the app.")
 
 
 @app.function(
@@ -234,6 +336,52 @@ def _debug_shell():
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _inject_user_clips(model_name: str) -> int:
+    """Copy user voice clips from /output/user_clips/ into
+    /output/<model_name>/positive_train/ at indices continuing after the
+    synthetic TTS clips (so the augment + feature extraction stages treat
+    them as additional positives).
+
+    Returns the number of clips copied. Called from inside the train
+    function, running in the Modal container with the output volume mounted.
+    """
+    import shutil
+
+    src_dir = pathlib.Path(OUTPUT_MOUNT) / "user_clips"
+    dst_dir = pathlib.Path(OUTPUT_MOUNT) / model_name / "positive_train"
+
+    if not src_dir.exists():
+        print(f"[finetune] WARNING: {src_dir} not found — did you run "
+              f"`modal volume put hey-aira-output training/voice/clips user_clips`?")
+        return 0
+
+    dst_dir.mkdir(parents=True, exist_ok=True)
+
+    user_clips = sorted(src_dir.glob("*.wav"))
+    if not user_clips:
+        print(f"[finetune] WARNING: no .wav files found in {src_dir}")
+        return 0
+
+    # Start indexing after whatever synthetic clips are already there.
+    existing = sorted(dst_dir.glob("clip_*.wav"))
+    next_idx = 25000  # safe floor past the synthetic set
+    if existing:
+        last_stem = existing[-1].stem  # "clip_024999"
+        try:
+            last_idx = int(last_stem.rsplit("_", 1)[-1])
+            next_idx = max(next_idx, last_idx + 1)
+        except (ValueError, IndexError):
+            pass
+
+    for i, src in enumerate(user_clips):
+        dst = dst_dir / f"clip_{next_idx + i:06d}.wav"
+        shutil.copy2(src, dst)
+
+    print(f"[finetune] injected {len(user_clips)} user voice clips "
+          f"into {dst_dir.name}/ at indices {next_idx}-{next_idx + len(user_clips) - 1}")
+    return len(user_clips)
 
 
 def _run(cmd: list[str], *, check: bool = True) -> None:

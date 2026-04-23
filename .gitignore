@@ -23,3 +23,10 @@ HandsFree/Resources/AppIcon.iconset/
 .groq-key
 
 .env
+
+# Local wake-word model backups — the active ONNX ships in HandsFree/Resources/,
+# any "_v1" / "_test" variants are local debug/comparison artifacts that
+# shouldn't be in the repo.
+hey_aira_v1.onnx
+HandsFree/Resources/hey_aira_v1.onnx
+HandsFree/Resources/hey_aira_test.onnx
