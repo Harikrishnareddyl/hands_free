@@ -151,13 +151,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Log.info("app", "wake detected but already recording; ignored")
             return
         }
-        Log.info("app", "wake word → starting hands-free session")
+        let action = Preferences.wakeWordAction
+        Log.info("app", "wake word → action=\(action.rawValue)")
         // Release the mic before the recorder grabs it.
         wakeWord.stop()
-        startRecorderSilent()
-        wakeSessionActive = true
-        fnState = .handsFree
-        commitHandsFreeUI()   // starts the session timer (VAD + cap)
+
+        switch action {
+        case .dictate:
+            startRecorderSilent()
+            wakeSessionActive = true
+            fnState = .handsFree
+            commitHandsFreeUI()   // starts the session timer (VAD + cap)
+        case .askAI:
+            startWakeAskAISession()
+        }
+    }
+
+    /// Start an Ask AI recording from the wake-word detector. Mirrors
+    /// `beginAskAIRecording()` but flips the `wakeSessionActive` flag so the
+    /// session timer's VAD auto-submit kicks in (a user who said "Hey Aira"
+    /// can't also tap ⌃A to finish — we have to end the recording for them).
+    private func startWakeAskAISession() {
+        contextBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        do {
+            try recorder.start()
+            isRecording = true
+            recordingMode = .askAI
+            wakeSessionActive = true
+            setState("Recording (Ask AI)…", symbol: "waveform")
+            pill.setState(.recording)
+            if Preferences.audioCueMode != .off { SoundEffects.playStart() }
+            startSessionTimer()
+        } catch {
+            Log.error("app", "wake askAI start failed: \(error.localizedDescription)")
+            wakeSessionActive = false
+            recordingMode = .none
+            isRecording = false
+            pill.setState(.hidden)
+            refreshWakeWordEngine()
+        }
     }
 
     // MARK: - Session timer (duration cap + countdown + VAD)
@@ -233,8 +265,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // VAD auto-submit is wake-only.
-        guard wakeSessionActive, recordingMode == .dictateHandsFree else { return }
+        // VAD auto-submit is wake-only and applies to both the dictate
+        // hands-free flow and a wake-triggered Ask AI session.
+        guard wakeSessionActive,
+              recordingMode == .dictateHandsFree || recordingMode == .askAI
+        else { return }
         let level = AudioLevelMonitor.shared.level
         if level >= vadSpeechLevel {
             vadHeardSpeech = true
@@ -243,8 +278,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if vadSilentSince == nil { vadSilentSince = now }
             if let since = vadSilentSince,
                now.timeIntervalSince(since) >= vadSilenceThreshold {
-                Log.info("app", "VAD: silence after speech, auto-submit")
-                submitHandsFree()
+                Log.info("app", "VAD: silence after speech, auto-submit mode=\(recordingMode)")
+                switch recordingMode {
+                case .dictateHandsFree: submitHandsFree()
+                case .askAI:            endAskAIRecording()
+                default: break
+                }
             }
         } else {
             vadSilentSince = nil
@@ -837,11 +876,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard recordingMode == .askAI else { return }
         guard isRecording else {
             recordingMode = .none
+            wakeSessionActive = false
             stopSessionTimer()
             return
         }
         isRecording = false
         recordingMode = .none
+        wakeSessionActive = false
         stopSessionTimer()
 
         guard let (url, duration) = recorder.stop() else {
