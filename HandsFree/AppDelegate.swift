@@ -177,12 +177,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
         menu.addItem(
-            withTitle: "Hold Fn (🌐) or ⌃⌥D to dictate",
+            withTitle: "Hold Fn (🌐) or ⌃D to dictate",
             action: nil,
             keyEquivalent: ""
         ).isEnabled = false
         menu.addItem(
-            withTitle: "Hold ⌃⌥A to ask AI",
+            withTitle: "Hold ⌃A to ask AI",
             action: nil,
             keyEquivalent: ""
         ).isEnabled = false
@@ -682,7 +682,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Min clip:          \(String(format: "%.1f", Preferences.minDurationSeconds))s
         Vocabulary:        \(Preferences.transcriptionVocabulary.isEmpty ? "(none)" : "\(Preferences.transcriptionVocabulary.count) chars")
         History entries:   \(HistoryStore.shared.count())
-        Triggers:          Fn (🌐) + ⌃⌥D dictate, ⌃⌥A ask AI (push-to-talk)
+        Triggers:          Fn (🌐) + ⌃D dictate, ⌃A ask AI (push-to-talk)
         Bundle ID:         \(Bundle.main.bundleIdentifier ?? "?")
         Exec path:         \(execPath)
         PID:               \(ProcessInfo.processInfo.processIdentifier)

@@ -44,8 +44,7 @@ Downloads the latest DMG, installs `HandsFree` into `/Applications`, launches th
 
 1. Download the latest **`HandsFree-X.Y.Z.dmg`** from the [Releases](https://github.com/Harikrishnareddyl/hands_free/releases) page.
 2. Open the DMG and drag **HandsFree** into **Applications**.
-3. Double-click **HandsFree** from Applications. Releases are **signed + notarized** by Apple — no Gatekeeper warning, no right-click-open, no quarantine workaround needed.
-4. The microphone icon appears in your menu bar.
+3. Double-click **HandsFree** from Applications. The microphone icon appears in your menu bar.
 
 ## First-run setup
 

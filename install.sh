@@ -8,9 +8,11 @@
 #   1. Downloads the latest HandsFree DMG from GitHub Releases.
 #   2. Mounts the DMG silently, copies HandsFree.app into /Applications,
 #      then unmounts.
-#   3. Strips com.apple.quarantine so Gatekeeper lets it run on first launch
-#      (the release isn't notarized — see README for why).
-#   4. Launches HandsFree.
+#   3. Launches HandsFree.
+#
+# Belt-and-braces: we also strip com.apple.quarantine from the installed
+# bundle. For the official signed + notarized releases this is a no-op,
+# but if someone ever ships an ad-hoc fork the fallback keeps working.
 
 set -euo pipefail
 
@@ -112,14 +114,13 @@ if ! ditto "$SRC" "$DEST" 2>/dev/null; then
     sudo ditto "$SRC" "$DEST"
 fi
 
-step "Removing quarantine flag"
-xattr -dr com.apple.quarantine "$DEST" 2>/dev/null || true
+xattr -dr com.apple.quarantine "$DEST" 2>/dev/null || true   # no-op for notarized, keeps ad-hoc forks working
 
 step "Verifying code signature"
 if codesign --verify --strict "$DEST" >/dev/null 2>&1; then
     ok "Signature valid"
 else
-    info "Ad-hoc signed — that's expected for unnotarized builds."
+    info "Signature check failed — bundle may be an ad-hoc dev build."
 fi
 
 # --- Launch -----------------------------------------------------------------

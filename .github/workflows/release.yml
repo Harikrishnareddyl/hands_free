@@ -130,7 +130,7 @@ jobs:
 
             1. Download `HandsFree-${{ steps.version.outputs.version }}.dmg` below.
             2. Open it and drag **HandsFree** into your **Applications** folder.
-            3. Double-click **HandsFree**. This release is **signed + notarized** by Apple — no Gatekeeper warnings, no right-click-open, no quarantine workaround needed.
+            3. Double-click **HandsFree**.
             4. Open **Settings** from the menu-bar mic icon → follow the *Setup guide* to add your Groq API key.
             5. Grant Microphone + Accessibility + (optional) Input Monitoring permissions when prompted.
 
