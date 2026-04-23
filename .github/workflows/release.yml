@@ -1,0 +1,137 @@
+name: Build DMG
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag for the DMG (e.g. 0.1.0)'
+        required: false
+        default: 'dev'
+
+permissions:
+  contents: write   # needed for softprops/action-gh-release to publish releases
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select latest Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Print environment
+        run: |
+          xcodebuild -version
+          swift --version
+          sw_vers
+
+      - name: Install build tools
+        run: brew install xcodegen create-dmg
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${{ inputs.version || 'dev' }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Import the .p12 signing cert from GitHub secrets into a temp keychain,
+      # so every release is signed with the same identity (stable TCC entries).
+      # If the secrets aren't configured, falls back to ad-hoc signing.
+      - name: Import signing certificate
+        id: signing
+        env:
+          SIGNING_CERT_P12_BASE64: ${{ secrets.SIGNING_CERT_P12_BASE64 }}
+          SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+        run: |
+          if [ -z "$SIGNING_CERT_P12_BASE64" ]; then
+            echo "::notice::SIGNING_CERT_P12_BASE64 not set — falling back to ad-hoc signing"
+            echo "identity=-" >> "$GITHUB_OUTPUT"
+            echo "keychain=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          CERT="$RUNNER_TEMP/cert.p12"
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASS=$(openssl rand -base64 24)
+
+          echo "$SIGNING_CERT_P12_BASE64" | base64 --decode > "$CERT"
+
+          security create-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN"
+          security import "$CERT" -P "$SIGNING_CERT_PASSWORD" -k "$KEYCHAIN" -T /usr/bin/codesign
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASS" "$KEYCHAIN" >/dev/null
+
+          # NOTE: no -v flag — our self-signed cert reports CSSMERR_TP_NOT_TRUSTED
+          # (expected for a self-signed identity) and -v filters those out.
+          # codesign can still use untrusted identities just fine.
+          IDENTITY=$(security find-identity -p codesigning "$KEYCHAIN" 2>/dev/null \
+                      | grep -m1 -oE '"[^"]+"' | tr -d '"')
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::No code-signing identity found after import"
+            security find-identity -p codesigning "$KEYCHAIN"
+            exit 1
+          fi
+          echo "Imported identity: $IDENTITY"
+          echo "identity=$IDENTITY" >> "$GITHUB_OUTPUT"
+          echo "keychain=$KEYCHAIN" >> "$GITHUB_OUTPUT"
+
+          rm -f "$CERT"
+
+      - name: Build DMG
+        env:
+          SIGN_IDENTITY: ${{ steps.signing.outputs.identity }}
+          VERSION: ${{ steps.version.outputs.version }}
+          # Trigger notarization if Apple creds are present as repo secrets.
+          # Without them build-dmg.sh skips the notarytool step.
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: ./scripts/build-dmg.sh
+
+      - name: Clean up signing keychain
+        if: always() && steps.signing.outputs.keychain != ''
+        run: |
+          security delete-keychain "${{ steps.signing.outputs.keychain }}" 2>/dev/null || true
+
+      - name: Upload DMG as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HandsFree-${{ steps.version.outputs.version }}
+          path: HandsFree-*.dmg
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: HandsFree-*.dmg
+          generate_release_notes: true
+          body: |
+            ## Installation
+
+            **One-liner (recommended):**
+
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/Harikrishnareddyl/hands-free/main/install.sh | bash
+            ```
+
+            Downloads this DMG, installs to `/Applications`, launches. Takes ~10 seconds.
+
+            **Or manually:**
+
+            1. Download `HandsFree-${{ steps.version.outputs.version }}.dmg` below.
+            2. Open it and drag **HandsFree** into your **Applications** folder.
+            3. Double-click **HandsFree**.
+            4. Open **Settings** from the menu-bar mic icon → follow the *Setup guide* to add your Groq API key.
+            5. Grant Microphone + Accessibility + (optional) Input Monitoring permissions when prompted.
+
+            Hold **⌃D** or **Fn (🌐)** and speak to dictate. Hold **⌃A** to ask AI. Double-tap **Fn** for hands-free recording with a clickable pill.
