@@ -31,6 +31,16 @@ Open-source alternative to [Wispr Flow](https://wisprflow.ai), [Superwhisper](ht
 
 ## Install
 
+### One-liner (recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Harikrishnareddyl/hands_free/main/install.sh | bash
+```
+
+Downloads the latest DMG, installs `HandsFree` into `/Applications`, strips the Gatekeeper quarantine flag so it launches without the "unidentified developer" block, and opens the app. Takes ~10 seconds.
+
+### Manual install
+
 1. Download the latest **`HandsFree-X.Y.Z.dmg`** from the [Releases](https://github.com/Harikrishnareddyl/hands_free/releases) page.
 2. Open the DMG and drag **HandsFree** into **Applications**.
 3. Launch from `/Applications`. macOS will block it with *"HandsFree can't be opened because Apple cannot check it for malicious software"* — the release isn't notarized because I don't have a paid Apple Developer account. Bypass it **once**, one of two ways:
