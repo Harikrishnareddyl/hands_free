@@ -11,6 +11,9 @@ on:
         required: false
         default: 'dev'
 
+permissions:
+  contents: write   # needed for softprops/action-gh-release to publish releases
+
 jobs:
   build:
     runs-on: macos-15
