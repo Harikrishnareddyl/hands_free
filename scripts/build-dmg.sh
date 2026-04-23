@@ -63,7 +63,7 @@ if [ ! -d "$APP_PATH" ]; then
 fi
 
 echo "→ Signing app (identity: $SIGN_IDENTITY)"
-codesign --force --deep --sign "$SIGN_IDENTITY" --options runtime --timestamp=none "$APP_PATH"
+codesign --force --deep --sign "$SIGN_IDENTITY" --options runtime --timestamp "$APP_PATH"
 
 echo "→ Verifying code signature"
 codesign --verify --strict --verbose=2 "$APP_PATH" 2>&1 | tail -3 || true
@@ -106,7 +106,7 @@ else
 fi
 
 echo "→ Signing DMG"
-codesign --sign "$SIGN_IDENTITY" --timestamp=none "$DMG_PATH" || \
+codesign --sign "$SIGN_IDENTITY" --timestamp "$DMG_PATH" || \
   echo "  (codesign on DMG failed — self-signed certs can't always sign DMGs; the .app inside is still signed)"
 
 if [[ -n "${APPLE_ID:-}" && -n "${APPLE_TEAM_ID:-}" && -n "${APPLE_APP_PASSWORD:-}" ]]; then

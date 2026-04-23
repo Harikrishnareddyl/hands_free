@@ -91,6 +91,11 @@ jobs:
         env:
           SIGN_IDENTITY: ${{ steps.signing.outputs.identity }}
           VERSION: ${{ steps.version.outputs.version }}
+          # Trigger notarization if Apple creds are present as repo secrets.
+          # Without them build-dmg.sh skips the notarytool step.
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: ./scripts/build-dmg.sh
 
       - name: Clean up signing keychain

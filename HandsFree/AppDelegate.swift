@@ -628,10 +628,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Input Monitoring:  \(inputMon)
         Groq API key:      \(keyPresent ? "found" : "MISSING — open Settings to add one")
         Transcription:     \(Preferences.transcriptionModel)
+        Ask AI model:      \(Preferences.askAIModel)
         Min clip:          \(String(format: "%.1f", Preferences.minDurationSeconds))s
         Vocabulary:        \(Preferences.transcriptionVocabulary.isEmpty ? "(none)" : "\(Preferences.transcriptionVocabulary.count) chars")
         History entries:   \(HistoryStore.shared.count())
-        Triggers:          Fn (🌐) + ⌃⌥D, both push-to-talk
+        Triggers:          Fn (🌐) + ⌃⌥D dictate, ⌃⌥A ask AI (push-to-talk)
         Bundle ID:         \(Bundle.main.bundleIdentifier ?? "?")
         Exec path:         \(execPath)
         PID:               \(ProcessInfo.processInfo.processIdentifier)
