@@ -23,10 +23,25 @@ STAGE_DIR=".build/dmg-staging"
 APP_PATH=".build/Build/Products/Release/HandsFree.app"
 DMG_PATH="HandsFree-${VERSION}.dmg"
 
+echo "→ Environment"
+echo "  xcodegen:  $(xcodegen --version 2>&1 | head -1)"
+echo "  xcodebuild: $(xcodebuild -version 2>&1 | head -1)"
+echo "  pwd:       $(pwd)"
+
 echo "→ Regenerating Xcode project"
-xcodegen generate >/dev/null
+xcodegen generate
+if [ ! -d HandsFree.xcodeproj ]; then
+    echo "✗ xcodegen did not produce HandsFree.xcodeproj"
+    exit 1
+fi
+
+echo "→ Resolving Swift packages"
+xcodebuild -project HandsFree.xcodeproj -scheme HandsFree \
+    -resolvePackageDependencies 2>&1 | tail -3 || true
 
 echo "→ Building Release (will sign separately)"
+mkdir -p "$BUILD_DIR"
+set +e
 xcodebuild \
   -project HandsFree.xcodeproj \
   -scheme HandsFree \
@@ -36,10 +51,14 @@ xcodebuild \
   CODE_SIGN_IDENTITY="" \
   CODE_SIGNING_REQUIRED=NO \
   CODE_SIGNING_ALLOWED=NO \
-  build 2>&1 | grep -E "(error:|warning:|BUILD )" | grep -v "Metadata extraction" || true
+  build 2>&1 | tee "$BUILD_DIR/build.log" | grep -E "(error:|warning:|BUILD )" | grep -v "Metadata extraction" || true
+BUILD_STATUS=${PIPESTATUS[0]}
+set -e
 
 if [ ! -d "$APP_PATH" ]; then
-    echo "✗ Build failed — $APP_PATH not found"
+    echo "✗ Build failed (xcodebuild exit=$BUILD_STATUS) — $APP_PATH not found"
+    echo "  last 40 lines of build log:"
+    tail -40 "$BUILD_DIR/build.log" 2>/dev/null || true
     exit 1
 fi
 
