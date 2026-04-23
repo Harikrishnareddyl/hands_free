@@ -9,12 +9,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let hotKey = HotKeyManager()
     private let fnKey = FnHotKeyMonitor()
+    private let askAIKey = AskAIHotKeyManager()
     private let recorder = AudioRecorder()
     private let windows = WindowCoordinator()
     private let pill = RecordingPill()
+    private let answerCard = AnswerCardPanel()
 
     private var isRecording = false
     private var contextBundleID: String?
+
+    /// Tracks which feature owns the current recording so the Fn/⌃⌥D and the
+    /// Ask-AI hotkeys can't step on each other. Set/cleared by the
+    /// `beginDictate…` / `beginAskAI…` wrappers around the existing pipeline.
+    private enum RecordingMode { case none, dictate, askAI }
+    private var recordingMode: RecordingMode = .none
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Log.info("app", "launched, pid=\(ProcessInfo.processInfo.processIdentifier), bundle=\(Bundle.main.bundlePath)")
@@ -29,13 +37,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         requestNotificationAccess()
         logPermissionSnapshot()
 
-        hotKey.onPressed = { [weak self] in self?.startRecording() }
-        hotKey.onReleased = { [weak self] in self?.stopAndTranscribe() }
+        hotKey.onPressed = { [weak self] in self?.beginDictateRecording() }
+        hotKey.onReleased = { [weak self] in self?.endDictateRecording() }
         hotKey.install()
 
-        fnKey.onPressed = { [weak self] in self?.startRecording() }
-        fnKey.onReleased = { [weak self] in self?.stopAndTranscribe() }
+        fnKey.onPressed = { [weak self] in self?.beginDictateRecording() }
+        fnKey.onReleased = { [weak self] in self?.endDictateRecording() }
         _ = fnKey.install()   // silent attempt; onboarding handles the UX if it fails
+
+        askAIKey.onPressed = { [weak self] in self?.beginAskAIRecording() }
+        askAIKey.onReleased = { [weak self] in self?.endAskAIRecording() }
+        askAIKey.install()
 
         showOnboardingIfNeeded()
         checkForUpdatesInBackground()
@@ -116,6 +128,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         menu.addItem(
             withTitle: "Hold Fn (🌐) or ⌃⌥D to dictate",
+            action: nil,
+            keyEquivalent: ""
+        ).isEnabled = false
+        menu.addItem(
+            withTitle: "Hold ⌃⌥A to ask AI",
             action: nil,
             keyEquivalent: ""
         ).isEnabled = false
@@ -241,6 +258,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Log.info("app", "snapshot: mic=\(mic.rawValue), ax=\(ax), groqKey=\(key)")
     }
 
+    // MARK: - Hotkey wrappers (mode-gated so the two flows don't collide)
+
+    private func beginDictateRecording() {
+        guard recordingMode == .none else { return }
+        recordingMode = .dictate
+        startRecording()
+    }
+
+    private func endDictateRecording() {
+        guard recordingMode == .dictate else { return }
+        recordingMode = .none
+        stopAndTranscribe()
+    }
+
     // MARK: - Recording pipeline
 
     private func startRecording() {
@@ -340,6 +371,134 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.setState("Idle", symbol: "mic.fill")
                 self.pill.setState(.hidden)
                 self.showError(error.localizedDescription)
+            }
+        }
+    }
+
+    // MARK: - Ask AI pipeline (parallel to dictate; shares AudioRecorder)
+
+    private func beginAskAIRecording() {
+        guard recordingMode == .none else { return }
+        guard !isRecording else { return }
+
+        do {
+            try recorder.start()
+            isRecording = true
+            recordingMode = .askAI
+            setState("Recording (Ask AI)…", symbol: "waveform")
+            pill.setState(.recording)
+            if Preferences.audioCueMode != .off { SoundEffects.playStart() }
+        } catch {
+            Log.error("app", "askAI startRecording failed: \(error.localizedDescription)")
+            pill.setState(.hidden)
+            showError("Record failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func endAskAIRecording() {
+        guard recordingMode == .askAI else { return }
+        guard isRecording else {
+            recordingMode = .none
+            return
+        }
+        isRecording = false
+        recordingMode = .none
+
+        guard let (url, duration) = recorder.stop() else {
+            setState("Idle", symbol: "mic.fill")
+            pill.setState(.hidden)
+            return
+        }
+
+        let minDuration = Preferences.minDurationSeconds
+        guard duration >= minDuration else {
+            Log.info("app", "askAI clip too short (\(String(format: "%.2f", duration))s), discarding")
+            try? FileManager.default.removeItem(at: url)
+            setState("Idle", symbol: "mic.fill")
+            pill.setState(.hidden)
+            return
+        }
+
+        setState("Transcribing (Ask AI)…", symbol: "hourglass")
+        pill.setState(.transcribing)
+        if Preferences.audioCueMode == .all { SoundEffects.startHum() }
+
+        Task { [weak self] in
+            await self?.runAskAI(url: url)
+        }
+    }
+
+    private func runAskAI(url: URL) async {
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            Task { @MainActor in SoundEffects.stopHum() }
+        }
+
+        do {
+            guard let apiKey = Secrets.groqAPIKey() else {
+                throw GroqClient.GroqError.missingAPIKey
+            }
+            let client = GroqClient(apiKey: apiKey)
+
+            let transcriptionModel = Preferences.transcriptionModel
+            let language: String? = Preferences.language.isEmpty ? nil : Preferences.language
+            let vocabPrompt: String? = {
+                let v = Preferences.transcriptionVocabulary.trimmingCharacters(in: .whitespacesAndNewlines)
+                return v.isEmpty ? nil : v
+            }()
+
+            let rawTranscript = try await client.transcribe(
+                audioURL: url,
+                model: transcriptionModel,
+                language: language,
+                prompt: vocabPrompt
+            )
+            let transcript = rawTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            guard !transcript.isEmpty else {
+                await MainActor.run {
+                    SoundEffects.stopHum()
+                    self.setState("Idle", symbol: "mic.fill")
+                    self.pill.setState(.hidden)
+                    self.showNotification(title: "Hands-Free", body: "No speech detected.")
+                }
+                return
+            }
+
+            // Hand off to the floating card: transcription done → thinking.
+            await MainActor.run {
+                self.setState("Thinking…", symbol: "sparkles")
+                self.pill.setState(.hidden)
+                self.answerCard.presentListening()
+                self.answerCard.setThinking(transcript: transcript)
+            }
+
+            let systemPrompt = Preferences.askAISystemPrompt
+            let model = Preferences.askAIModel
+            let messages: [GroqClient.ChatMessage] = [
+                .init(role: "system", content: systemPrompt),
+                .init(role: "user",   content: transcript)
+            ]
+
+            _ = try await client.chatStream(messages: messages, model: model) { delta in
+                Task { @MainActor in
+                    self.answerCard.appendDelta(delta)
+                }
+            }
+
+            await MainActor.run {
+                SoundEffects.stopHum()
+                self.setState("Idle", symbol: "mic.fill")
+                if Preferences.audioCueMode != .off { SoundEffects.playEnd() }
+                self.answerCard.setDone()
+            }
+        } catch {
+            Log.error("app", "askAI pipeline failed: \(error.localizedDescription)")
+            await MainActor.run {
+                SoundEffects.stopHum()
+                self.setState("Idle", symbol: "mic.fill")
+                self.pill.setState(.hidden)
+                self.answerCard.setError(error.localizedDescription)
             }
         }
     }

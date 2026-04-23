@@ -31,6 +31,9 @@ packages:
   GRDB:
     url: https://github.com/groue/GRDB.swift
     from: 6.29.0
+  MarkdownUI:
+    url: https://github.com/gonzalezreal/swift-markdown-ui
+    from: 2.4.1
 
 targets:
   HandsFree:
@@ -43,8 +46,8 @@ targets:
       path: HandsFree/Generated-Info.plist
       properties:
         LSUIElement: true
-        CFBundleShortVersionString: "0.1.4"
-        CFBundleVersion: "4"
+        CFBundleShortVersionString: "0.1.5"
+        CFBundleVersion: "5"
         CFBundleIconFile: "AppIcon"
         NSMicrophoneUsageDescription: "Hands-Free captures your voice while you hold the dictation hotkey and sends it to Groq for transcription."
         NSAppleEventsUsageDescription: "Hands-Free synthesizes a paste keystroke to insert transcribed text into the focused field."
@@ -55,6 +58,8 @@ targets:
     dependencies:
       - package: KeyboardShortcuts
       - package: GRDB
+      - package: MarkdownUI
+        product: MarkdownUI
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lakkireddylabs.HandsFree

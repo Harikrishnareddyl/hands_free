@@ -11,7 +11,15 @@ enum Preferences {
         static let transcriptionVocabulary = "transcriptionVocabulary"
         static let language = "language"
         static let minDurationSeconds = "minDurationSeconds"
+        static let askAIModel = "askAIModel"
+        static let askAISystemPrompt = "askAISystemPrompt"
     }
+
+    static let defaultAskAISystemPrompt = """
+    You are a concise assistant answering a spoken question. \
+    Reply in Markdown. Use fenced code blocks for code and short headings only when they help. \
+    Keep prose tight — no filler, no repetition of the question.
+    """
 
     // MARK: - Audio cues (Off / chimes only / all)
     static var audioCueMode: AudioCueMode {
@@ -55,5 +63,16 @@ enum Preferences {
             return v <= 0 ? 2.0 : v
         }
         set { defaults.set(newValue, forKey: Key.minDurationSeconds) }
+    }
+
+    // MARK: - Ask AI (separate from transcription)
+    static var askAIModel: String {
+        get { defaults.string(forKey: Key.askAIModel) ?? GroqClient.LLMModel.llama33_70b }
+        set { defaults.set(newValue, forKey: Key.askAIModel) }
+    }
+
+    static var askAISystemPrompt: String {
+        get { defaults.string(forKey: Key.askAISystemPrompt) ?? defaultAskAISystemPrompt }
+        set { defaults.set(newValue, forKey: Key.askAISystemPrompt) }
     }
 }

@@ -190,45 +190,58 @@ struct OnboardingView: View {
     }
 
     private func requestMic() {
-        // Two-step force-registration, because on macOS 15 Sequoia
-        // `AVCaptureDevice.requestAccess` alone doesn't always add a
-        // previously-denied app to System Settings → Privacy → Microphone:
-        //
-        // 1) Call requestAccess — shows the prompt on .notDetermined.
-        // 2) If still not granted, actually spin up AVAudioEngine against
-        //    the input node. The engine start attempt triggers a real
-        //    CoreAudio permission check, which is what TCC listens to when
-        //    populating the Settings list.
-        // 3) Finally, open the Settings pane so the user can toggle the row
-        //    that now exists.
-        AVCaptureDevice.requestAccess(for: .audio) { granted in
-            Task { @MainActor in
-                if !granted { Self.forceRegisterWithTCC() }
-                // Give TCC a beat to propagate before we open Settings.
-                try? await Task.sleep(nanoseconds: 500_000_000)
-                refresh()
-                if AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
-                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
-                        NSWorkspace.shared.open(url)
+        let status = AVCaptureDevice.authorizationStatus(for: .audio)
+
+        // Fresh state — the normal API will show the prompt AND register
+        // the app in System Settings.
+        if status == .notDetermined {
+            AVCaptureDevice.requestAccess(for: .audio) { _ in
+                Task { @MainActor in refresh() }
+            }
+            return
+        }
+
+        // Already .denied / .restricted / (shouldn't happen but) .authorized.
+        // On macOS 15 Sequoia, a bundle that has any TCC history can fail to
+        // re-register in the Settings list even after a fresh requestAccess —
+        // the OS short-circuits. Nuclear path: wipe our bundle's mic entry
+        // via `tccutil reset`, then request again so the user gets a clean
+        // system prompt and the app appears fresh in Settings.
+        Task { @MainActor in
+            Self.resetMicTCC()
+            // tccutil runs quickly but needs a beat to propagate.
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            refresh()
+
+            AVCaptureDevice.requestAccess(for: .audio) { granted in
+                Task { @MainActor in
+                    refresh()
+                    if !granted {
+                        try? await Task.sleep(nanoseconds: 300_000_000)
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+                            NSWorkspace.shared.open(url)
+                        }
                     }
                 }
             }
         }
     }
 
-    /// Attempts to briefly start AVAudioEngine. On already-denied state this
-    /// throws, but the attempt forces CoreAudio (and therefore TCC) to register
-    /// the app in System Settings → Privacy & Security → Microphone.
-    private static func forceRegisterWithTCC() {
-        let engine = AVAudioEngine()
-        let input = engine.inputNode
-        _ = input.outputFormat(forBus: 0)   // touches the hardware graph
+    /// Resets the Microphone TCC entry for this bundle, forcing the next
+    /// requestAccess call to go through the fresh-prompt code path.
+    /// `tccutil reset <service> <bundleID>` is bundle-scoped and doesn't
+    /// require admin when the bundle belongs to the current user's apps.
+    private static func resetMicTCC() {
+        let bundleID = Bundle.main.bundleIdentifier ?? "com.lakkireddylabs.HandsFree"
+        let task = Process()
+        task.launchPath = "/usr/bin/tccutil"
+        task.arguments = ["reset", "Microphone", bundleID]
         do {
-            try engine.start()
-            engine.stop()
-            Log.info("onboarding", "force-register: engine started briefly")
+            try task.run()
+            task.waitUntilExit()
+            Log.info("onboarding", "tccutil reset Microphone \(bundleID) → exit=\(task.terminationStatus)")
         } catch {
-            Log.info("onboarding", "force-register returned (expected if denied): \(error.localizedDescription)")
+            Log.error("onboarding", "tccutil reset failed: \(error.localizedDescription)")
         }
     }
 

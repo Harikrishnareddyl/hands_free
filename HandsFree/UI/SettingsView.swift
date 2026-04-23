@@ -12,12 +12,15 @@ struct SettingsView: View {
     @AppStorage("transcriptionVocabulary")  private var vocabulary = ""
     @AppStorage("language")                 private var language = ""
     @AppStorage("minDurationSeconds")       private var minDuration = 2.0
+    @AppStorage("askAIModel")               private var askAIModel = GroqClient.LLMModel.llama33_70b
+    @AppStorage("askAISystemPrompt")        private var askAISystemPrompt = Preferences.defaultAskAISystemPrompt
 
     var body: some View {
         Form {
             apiKeySection
             hotkeySection
             transcriptionSection
+            askAISection
             soundsSection
             generalSection
         }
@@ -62,11 +65,49 @@ struct SettingsView: View {
     // MARK: - Hotkey
 
     private var hotkeySection: some View {
-        Section("Hotkey") {
-            LabeledContent("Shortcut") {
+        Section("Hotkeys") {
+            LabeledContent("Dictate") {
                 KeyboardShortcuts.Recorder(for: .dictate)
             }
+            LabeledContent("Ask AI") {
+                KeyboardShortcuts.Recorder(for: .askAI)
+            }
             Text("Fn (🌐) always triggers dictation, regardless of this setting.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    // MARK: - Ask AI
+
+    private var askAISection: some View {
+        Section("Ask AI") {
+            Picker("Model", selection: $askAIModel) {
+                ForEach(GroqClient.LLMModel.all, id: \.id) { m in
+                    Text(m.label).tag(m.id)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("System prompt")
+                    Spacer()
+                    Button("Reset") {
+                        askAISystemPrompt = Preferences.defaultAskAISystemPrompt
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                }
+                TextEditor(text: $askAISystemPrompt)
+                    .font(.system(size: 12))
+                    .frame(minHeight: 90, maxHeight: 160)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 5)
+                            .strokeBorder(Color.secondary.opacity(0.25), lineWidth: 0.5)
+                    )
+            }
+
+            Text("Hold the Ask-AI hotkey, speak your question, release to get a streamed answer in a floating card.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
