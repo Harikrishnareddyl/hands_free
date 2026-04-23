@@ -192,8 +192,7 @@ struct OnboardingView: View {
     private func requestMic() {
         let status = AVCaptureDevice.authorizationStatus(for: .audio)
 
-        // Fresh state — the normal API will show the prompt AND register
-        // the app in System Settings.
+        // Fresh state — the normal API shows the prompt and registers the app.
         if status == .notDetermined {
             AVCaptureDevice.requestAccess(for: .audio) { _ in
                 Task { @MainActor in refresh() }
@@ -201,29 +200,37 @@ struct OnboardingView: View {
             return
         }
 
-        // Already .denied / .restricted / (shouldn't happen but) .authorized.
-        // On macOS 15 Sequoia, a bundle that has any TCC history can fail to
-        // re-register in the Settings list even after a fresh requestAccess —
-        // the OS short-circuits. Nuclear path: wipe our bundle's mic entry
-        // via `tccutil reset`, then request again so the user gets a clean
-        // system prompt and the app appears fresh in Settings.
-        Task { @MainActor in
-            Self.resetMicTCC()
-            // tccutil runs quickly but needs a beat to propagate.
-            try? await Task.sleep(nanoseconds: 400_000_000)
-            refresh()
+        // Status is already .denied / .restricted / .authorized.
+        //
+        // `AVCaptureDevice.authorizationStatus` caches inside the process for
+        // its lifetime. If we just call `tccutil reset` and `requestAccess`
+        // here, the running HandsFree keeps seeing .denied and no prompt ever
+        // appears. The fix is to reset TCC, set a flag telling the next
+        // launch to re-request automatically, and relaunch the app so
+        // AVCaptureDevice starts from a clean in-process cache.
+        Self.resetMicTCC()
+        UserDefaults.standard.set(true, forKey: "autoRequestMicOnNextLaunch")
+        UserDefaults.standard.synchronize()
+        Log.info("onboarding", "quitting so AVCaptureDevice re-initializes; mic prompt will fire on relaunch")
+        Self.relaunchSelf()
+    }
 
-            AVCaptureDevice.requestAccess(for: .audio) { granted in
-                Task { @MainActor in
-                    refresh()
-                    if !granted {
-                        try? await Task.sleep(nanoseconds: 300_000_000)
-                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
-                            NSWorkspace.shared.open(url)
-                        }
-                    }
-                }
-            }
+    /// Spawns a detached `open` that waits 1s then relaunches us, then quits.
+    private static func relaunchSelf() {
+        let appPath = Bundle.main.bundlePath
+        let cmd = "(sleep 1 && open \"\(appPath)\") >/tmp/handsfree-relaunch.log 2>&1 </dev/null & disown"
+        let task = Process()
+        task.launchPath = "/bin/bash"
+        task.arguments = ["-c", cmd]
+        task.standardInput = Pipe()
+        do {
+            try task.run()
+            task.waitUntilExit()
+        } catch {
+            Log.error("onboarding", "relaunch spawn failed: \(error.localizedDescription)")
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            NSApp.terminate(nil)
         }
     }
 

@@ -50,7 +50,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         askAIKey.install()
 
         showOnboardingIfNeeded()
+        honorPendingMicRequest()
         checkForUpdatesInBackground()
+    }
+
+    /// If the onboarding set the auto-request flag before relaunching us,
+    /// fire a fresh `AVCaptureDevice.requestAccess` now — status is finally
+    /// `.notDetermined` in this brand-new process (the in-process cache from
+    /// the pre-relaunch instance is gone), so the system prompt shows.
+    private func honorPendingMicRequest() {
+        let key = "autoRequestMicOnNextLaunch"
+        guard UserDefaults.standard.bool(forKey: key) else { return }
+        UserDefaults.standard.removeObject(forKey: key)
+
+        let status = AVCaptureDevice.authorizationStatus(for: .audio)
+        Log.info("app", "honoring pending mic request, status raw=\(status.rawValue)")
+        if status == .notDetermined {
+            // Small delay so the onboarding window is visible before the prompt pops.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                AVCaptureDevice.requestAccess(for: .audio) { granted in
+                    Log.info("app", "auto-request mic result: granted=\(granted)")
+                }
+            }
+        } else {
+            Log.info("app", "auto-request skipped, status was \(status.rawValue)")
+        }
     }
 
     // MARK: - Update check
