@@ -71,7 +71,10 @@ jobs:
           security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASS" "$KEYCHAIN" >/dev/null
 
-          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" 2>/dev/null \
+          # NOTE: no -v flag — our self-signed cert reports CSSMERR_TP_NOT_TRUSTED
+          # (expected for a self-signed identity) and -v filters those out.
+          # codesign can still use untrusted identities just fine.
+          IDENTITY=$(security find-identity -p codesigning "$KEYCHAIN" 2>/dev/null \
                       | grep -m1 -oE '"[^"]+"' | tr -d '"')
           if [ -z "$IDENTITY" ]; then
             echo "::error::No code-signing identity found after import"
