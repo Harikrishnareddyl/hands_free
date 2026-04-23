@@ -4,7 +4,9 @@ import KeyboardShortcuts
 
 struct SettingsView: View {
     @State private var apiKeyPresent: Bool = Secrets.groqAPIKey() != nil
+    @State private var deepgramKeyPresent: Bool = Secrets.deepgramAPIKey() != nil
     @State private var showSetupSheet: Bool = false
+    @State private var showDeepgramSetupSheet: Bool = false
     @State private var launchAtLogin: Bool = LaunchAtLogin.isEnabled
 
     @State private var audioCueMode: AudioCueMode = Preferences.audioCueMode
@@ -16,8 +18,14 @@ struct SettingsView: View {
     @AppStorage("maxDurationSeconds")       private var maxDuration = 180.0
     @AppStorage("askAIModel")               private var askAIModel = GroqClient.LLMModel.llama33_70b
     @AppStorage("askAISystemPrompt")        private var askAISystemPrompt = Preferences.defaultAskAISystemPrompt
+    @AppStorage("answerAutoHideEnabled")    private var answerAutoHideEnabled = true
+    @AppStorage("answerAutoHideSeconds")    private var answerAutoHideSeconds = 30.0
+    @AppStorage("speakAnswersEnabled")      private var speakAnswersEnabled = true
+    @AppStorage("cloudTTSEnabled")          private var cloudTTSEnabled = false
+    @AppStorage("deepgramVoice")            private var deepgramVoice = "aura-2-thalia-en"
     @AppStorage("wakeWordEnabled")          private var wakeWordEnabled = false
     @AppStorage("wakeWordThreshold")        private var wakeWordThreshold = 0.5
+    @AppStorage("wakeWordAction")           private var wakeWordAction = Preferences.WakeWordAction.dictate.rawValue
 
     var body: some View {
         Form {
@@ -26,6 +34,7 @@ struct SettingsView: View {
             wakeWordSection
             transcriptionSection
             askAISection
+            cloudTTSSection
             soundsSection
             generalSection
             aboutSection
@@ -40,6 +49,9 @@ struct SettingsView: View {
         )
         .sheet(isPresented: $showSetupSheet) {
             APIKeySetupSheet(isPresented: $showSetupSheet) { recheck() }
+        }
+        .sheet(isPresented: $showDeepgramSetupSheet) {
+            DeepgramKeySetupSheet(isPresented: $showDeepgramSetupSheet) { recheck() }
         }
         .onAppear { recheck() }
     }
@@ -96,13 +108,25 @@ struct SettingsView: View {
                 }
             )) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Say \u{201C}\(WakeWordEngine.wakePhrase)\u{201D} to dictate")
+                    Text("Say \u{201C}\(WakeWordEngine.wakePhrase)\u{201D} to start a session")
                     Text("Always listens on-device. Audio only leaves your Mac after the phrase fires.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
             if wakeWordEnabled {
+                Picker("When it fires", selection: $wakeWordAction) {
+                    ForEach(Preferences.WakeWordAction.allCases) { action in
+                        Text(action.label).tag(action.rawValue)
+                    }
+                }
+                Text(wakeWordAction == Preferences.WakeWordAction.askAI.rawValue
+                     ? "Answers stream into the floating card and are read aloud by the built-in voice."
+                     : "Transcribed text is pasted (or copied) into whatever app is focused.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
                 Text("After the cue, start speaking. Hands-Free auto-submits once you pause for about a second — or click the pill to cancel.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -170,6 +194,73 @@ struct SettingsView: View {
             Text("Speak a question, release to get a streamed answer in a floating card.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+            Toggle(isOn: $speakAnswersEnabled) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Read answers aloud")
+                    Text("Uses the built-in macOS voice. Turn off to hide the speaker button entirely.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Toggle("Auto-hide answer card", isOn: $answerAutoHideEnabled)
+            if answerAutoHideEnabled {
+                LabeledContent("Hide after") {
+                    HStack(spacing: 4) {
+                        TextField("", value: $answerAutoHideSeconds,
+                                  format: .number.precision(.fractionLength(0)))
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 60)
+                        Text("s")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Text("Resets whenever you click, drag, scroll, or type in the card. Turn off to keep it on screen until you close it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    // MARK: - Cloud TTS
+
+    private var cloudTTSSection: some View {
+        Section("Cloud TTS (optional)") {
+            HStack(spacing: 8) {
+                Image(systemName: deepgramKeyPresent
+                      ? "checkmark.circle.fill"
+                      : "exclamationmark.triangle.fill")
+                    .foregroundStyle(deepgramKeyPresent ? Color.green : Color.orange)
+                Text(deepgramKeyPresent ? "Deepgram key configured" : "No Deepgram key")
+                Spacer()
+                Button(deepgramKeyPresent ? "Setup guide…" : "Set up key…") {
+                    showDeepgramSetupSheet = true
+                }
+            }
+
+            Toggle(isOn: Binding(
+                get: { cloudTTSEnabled && deepgramKeyPresent },
+                set: { newValue in cloudTTSEnabled = newValue }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Use cloud voice for answers")
+                    Text("When on, answers stream through Deepgram's Aura voices. When off (or key missing), the built-in macOS voice is used.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .disabled(!deepgramKeyPresent)
+
+            if cloudTTSEnabled && deepgramKeyPresent {
+                Picker("Voice", selection: $deepgramVoice) {
+                    ForEach(DeepgramTTSPlayer.Voice.allCases) { v in
+                        Text(v.label).tag(v.rawValue)
+                    }
+                }
+            }
         }
     }
 
@@ -285,6 +376,7 @@ struct SettingsView: View {
 
     private func recheck() {
         apiKeyPresent = Secrets.groqAPIKey() != nil
+        deepgramKeyPresent = Secrets.deepgramAPIKey() != nil
     }
 }
 
@@ -344,6 +436,91 @@ private struct APIKeySetupSheet: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Text("• A key at `~/.config/handsfree/groq-key` is auto-migrated on first read.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack {
+                Spacer()
+                Button("Done") {
+                    onDismiss()
+                    isPresented = false
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 560)
+    }
+
+    private func revealFolder() {
+        let fm = FileManager.default
+        let base = (try? fm.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )) ?? fm.homeDirectoryForCurrentUser
+        let dir = base.appendingPathComponent("HandsFree", isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        NSWorkspace.shared.activateFileViewerSelecting([dir])
+    }
+}
+
+// MARK: - Deepgram setup sheet
+
+private struct DeepgramKeySetupSheet: View {
+    @Binding var isPresented: Bool
+    var onDismiss: () -> Void
+
+    private let commands = """
+    mkdir -p ~/Library/Application\\ Support/HandsFree
+    chmod 700 ~/Library/Application\\ Support/HandsFree
+    printf '%s' 'YOUR_DEEPGRAM_KEY' > ~/Library/Application\\ Support/HandsFree/deepgram-key
+    chmod 600 ~/Library/Application\\ Support/HandsFree/deepgram-key
+    """
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Deepgram TTS setup")
+                    .font(.title2.weight(.semibold))
+                Spacer()
+                Link("Get a key ↗",
+                     destination: URL(string: "https://console.deepgram.com/signup")!)
+                    .font(.subheadline)
+            }
+
+            Text("Optional. Powers low-latency spoken answers. Hands-Free reads the key from a plain text file — no Keychain, no password prompts. Leave unconfigured to use the built-in macOS voice instead.")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Run in Terminal (replace `YOUR_DEEPGRAM_KEY`):")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(commands)
+                    .font(.system(.caption, design: .monospaced))
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.secondary.opacity(0.1))
+                    .cornerRadius(6)
+                    .textSelection(.enabled)
+                HStack {
+                    Button("Copy commands") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(commands, forType: .string)
+                    }
+                    Button("Reveal folder in Finder") { revealFolder() }
+                }
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Alternatives")
+                    .font(.caption.weight(.semibold))
+                Text("• Set `DEEPGRAM_API_KEY` as an environment variable in your shell profile.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

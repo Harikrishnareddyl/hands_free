@@ -16,7 +16,47 @@ enum Preferences {
         static let wakeWordEnabled = "wakeWordEnabled"
         static let wakeWordExecutionProvider = "wakeWordExecutionProvider"
         static let wakeWordThreshold = "wakeWordThreshold"
+        static let wakeWordAction = "wakeWordAction"
         static let maxDurationSeconds = "maxDurationSeconds"
+        static let answerAutoHideEnabled = "answerAutoHideEnabled"
+        static let answerAutoHideSeconds = "answerAutoHideSeconds"
+        static let speakAnswersEnabled = "speakAnswersEnabled"
+        static let speakAnswersMuted = "speakAnswersMuted"
+        static let cloudTTSEnabled = "cloudTTSEnabled"
+        static let cloudTTSProvider = "cloudTTSProvider"
+        static let deepgramVoice = "deepgramVoice"
+    }
+
+    enum CloudTTSProvider: String, CaseIterable, Identifiable {
+        case deepgram
+
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .deepgram: return "Deepgram"
+            }
+        }
+        var keyName: String {
+            switch self {
+            case .deepgram: return "deepgram-key"
+            }
+        }
+    }
+
+    /// What the \u{201C}Hey Aira\u{201D} wake word triggers. Default is
+    /// dictation to preserve pre-upgrade behavior; users can switch to Ask AI
+    /// from Settings when they want the floating-answer card instead.
+    enum WakeWordAction: String, CaseIterable, Identifiable {
+        case dictate
+        case askAI
+
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .dictate: return "Dictate"
+            case .askAI:   return "Ask AI"
+            }
+        }
     }
 
     /// ONNX Runtime execution provider used by the wake-word model. Mirrors
@@ -42,9 +82,15 @@ enum Preferences {
     }
 
     static let defaultAskAISystemPrompt = """
-    You are a concise assistant answering a spoken question. \
-    Reply in Markdown. Use fenced code blocks for code and short headings only when they help. \
-    Keep prose tight — no filler, no repetition of the question.
+    You are a concise assistant answering a spoken question. The user's message was \
+    transcribed from speech, so expect occasional homophones, missing punctuation, or \
+    odd capitalization — infer intent charitably instead of asking for clarification. \
+    Your reply will be read aloud by a text-to-speech engine, so write plain prose that \
+    sounds natural spoken. Start with the answer directly — no title line, no headings, \
+    no preamble like \u{201C}Sure\u{201D} or \u{201C}Here is\u{201D}. Avoid bullet lists, \
+    tables, code blocks, and emoji unless the user explicitly asks for code. Keep it \
+    tight: two or three short sentences for simple questions; a little longer only when \
+    real detail is needed.
     """
 
     // MARK: - Audio cues (Off / chimes only / all)
@@ -102,6 +148,75 @@ enum Preferences {
         set { defaults.set(max(5, newValue), forKey: Key.maxDurationSeconds) }
     }
 
+    // MARK: - Spoken answers (text-to-speech)
+    /// Master switch. When off, the answer card hides its speaker button and
+    /// never reads replies aloud. Default on.
+    static var speakAnswersEnabled: Bool {
+        get {
+            if defaults.object(forKey: Key.speakAnswersEnabled) == nil { return true }
+            return defaults.bool(forKey: Key.speakAnswersEnabled)
+        }
+        set { defaults.set(newValue, forKey: Key.speakAnswersEnabled) }
+    }
+
+    /// Per-panel mute toggled by the speaker button. Persists so a mute
+    /// chosen during one answer applies to the next one too. Default off
+    /// (answers auto-play).
+    static var speakAnswersMuted: Bool {
+        get { defaults.bool(forKey: Key.speakAnswersMuted) }
+        set { defaults.set(newValue, forKey: Key.speakAnswersMuted) }
+    }
+
+    /// Opt-in cloud TTS. Default off — answers use the built-in macOS
+    /// voice until the user explicitly enables this and supplies a key.
+    /// The SpeechManager also re-reads `Secrets.deepgramAPIKey()` at
+    /// speak-time and falls back silently to the system voice if the
+    /// key file is missing.
+    static var cloudTTSEnabled: Bool {
+        get { defaults.bool(forKey: Key.cloudTTSEnabled) }
+        set { defaults.set(newValue, forKey: Key.cloudTTSEnabled) }
+    }
+
+    static var cloudTTSProvider: CloudTTSProvider {
+        get {
+            guard let raw = defaults.string(forKey: Key.cloudTTSProvider),
+                  let value = CloudTTSProvider(rawValue: raw) else {
+                return .deepgram
+            }
+            return value
+        }
+        set { defaults.set(newValue.rawValue, forKey: Key.cloudTTSProvider) }
+    }
+
+    /// Deepgram Aura-2 voice model id (e.g. `aura-2-thalia-en`). The
+    /// `DeepgramTTSPlayer.Voice` enum is the source of truth for the
+    /// available options; this string stays decoupled so new voices can
+    /// be added without a Preferences migration.
+    static var deepgramVoice: String {
+        get { defaults.string(forKey: Key.deepgramVoice) ?? "aura-2-thalia-en" }
+        set { defaults.set(newValue, forKey: Key.deepgramVoice) }
+    }
+
+    // MARK: - Answer card auto-hide
+    /// When on, the floating answer panel dismisses itself after
+    /// `answerAutoHideSeconds` of no interaction (and no active speech).
+    /// Default on — the card is meant to be glanceable, not persistent.
+    static var answerAutoHideEnabled: Bool {
+        get {
+            if defaults.object(forKey: Key.answerAutoHideEnabled) == nil { return true }
+            return defaults.bool(forKey: Key.answerAutoHideEnabled)
+        }
+        set { defaults.set(newValue, forKey: Key.answerAutoHideEnabled) }
+    }
+
+    static var answerAutoHideSeconds: Double {
+        get {
+            let v = defaults.double(forKey: Key.answerAutoHideSeconds)
+            return v <= 0 ? 30.0 : v
+        }
+        set { defaults.set(max(5, newValue), forKey: Key.answerAutoHideSeconds) }
+    }
+
     // MARK: - Ask AI (separate from transcription)
     static var askAIModel: String {
         get { defaults.string(forKey: Key.askAIModel) ?? GroqClient.LLMModel.llama33_70b }
@@ -120,6 +235,18 @@ enum Preferences {
             defaults.set(newValue, forKey: Key.wakeWordEnabled)
             NotificationCenter.default.post(name: .wakeWordPreferenceChanged, object: nil)
         }
+    }
+
+    /// Which flow the wake word starts. Users can switch in Settings.
+    static var wakeWordAction: WakeWordAction {
+        get {
+            guard let raw = defaults.string(forKey: Key.wakeWordAction),
+                  let value = WakeWordAction(rawValue: raw) else {
+                return .dictate
+            }
+            return value
+        }
+        set { defaults.set(newValue.rawValue, forKey: Key.wakeWordAction) }
     }
 
     static var wakeWordExecutionProvider: WakeWordExecutionProvider {

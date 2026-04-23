@@ -30,4 +30,17 @@ enum Secrets {
 
         return nil
     }
+
+    /// Deepgram key for the optional cloud TTS path. Same resolution order:
+    ///   1. `DEEPGRAM_API_KEY` env var (never persisted)
+    ///   2. `~/Library/Application Support/HandsFree/deepgram-key` (0600)
+    /// Missing key → returns nil and the app falls back to the built-in voice.
+    static func deepgramAPIKey() -> String? {
+        if let env = ProcessInfo.processInfo.environment["DEEPGRAM_API_KEY"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !env.isEmpty {
+            return env
+        }
+        return APIKeyStore.read(name: "deepgram-key")
+    }
 }
