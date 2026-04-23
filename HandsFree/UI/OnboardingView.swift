@@ -190,14 +190,19 @@ struct OnboardingView: View {
     }
 
     private func requestMic() {
-        let status = AVCaptureDevice.authorizationStatus(for: .audio)
-        if status == .denied || status == .restricted {
-            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
-                NSWorkspace.shared.open(url)
-            }
-        } else {
-            AVCaptureDevice.requestAccess(for: .audio) { _ in
-                Task { @MainActor in refresh() }
+        // Always call requestAccess first. For .notDetermined this shows the
+        // native prompt. For .denied it completes instantly with `false`, but
+        // — crucially — macOS then registers the app in System Settings →
+        // Privacy → Microphone so the user has a row to toggle. Without this
+        // call, a previously-denied state leaves Settings empty of the app.
+        AVCaptureDevice.requestAccess(for: .audio) { granted in
+            Task { @MainActor in
+                refresh()
+                if !granted {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
             }
         }
     }
