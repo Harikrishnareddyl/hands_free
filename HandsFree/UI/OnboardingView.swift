@@ -190,20 +190,45 @@ struct OnboardingView: View {
     }
 
     private func requestMic() {
-        // Always call requestAccess first. For .notDetermined this shows the
-        // native prompt. For .denied it completes instantly with `false`, but
-        // — crucially — macOS then registers the app in System Settings →
-        // Privacy → Microphone so the user has a row to toggle. Without this
-        // call, a previously-denied state leaves Settings empty of the app.
+        // Two-step force-registration, because on macOS 15 Sequoia
+        // `AVCaptureDevice.requestAccess` alone doesn't always add a
+        // previously-denied app to System Settings → Privacy → Microphone:
+        //
+        // 1) Call requestAccess — shows the prompt on .notDetermined.
+        // 2) If still not granted, actually spin up AVAudioEngine against
+        //    the input node. The engine start attempt triggers a real
+        //    CoreAudio permission check, which is what TCC listens to when
+        //    populating the Settings list.
+        // 3) Finally, open the Settings pane so the user can toggle the row
+        //    that now exists.
         AVCaptureDevice.requestAccess(for: .audio) { granted in
             Task { @MainActor in
+                if !granted { Self.forceRegisterWithTCC() }
+                // Give TCC a beat to propagate before we open Settings.
+                try? await Task.sleep(nanoseconds: 500_000_000)
                 refresh()
-                if !granted {
+                if AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
                     if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
                         NSWorkspace.shared.open(url)
                     }
                 }
             }
+        }
+    }
+
+    /// Attempts to briefly start AVAudioEngine. On already-denied state this
+    /// throws, but the attempt forces CoreAudio (and therefore TCC) to register
+    /// the app in System Settings → Privacy & Security → Microphone.
+    private static func forceRegisterWithTCC() {
+        let engine = AVAudioEngine()
+        let input = engine.inputNode
+        _ = input.outputFormat(forBus: 0)   // touches the hardware graph
+        do {
+            try engine.start()
+            engine.stop()
+            Log.info("onboarding", "force-register: engine started briefly")
+        } catch {
+            Log.info("onboarding", "force-register returned (expected if denied): \(error.localizedDescription)")
         }
     }
 

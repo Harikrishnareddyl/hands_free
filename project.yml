@@ -43,8 +43,8 @@ targets:
       path: HandsFree/Generated-Info.plist
       properties:
         LSUIElement: true
-        CFBundleShortVersionString: "0.1.3"
-        CFBundleVersion: "3"
+        CFBundleShortVersionString: "0.1.4"
+        CFBundleVersion: "4"
         CFBundleIconFile: "AppIcon"
         NSMicrophoneUsageDescription: "Hands-Free captures your voice while you hold the dictation hotkey and sends it to Groq for transcription."
         NSAppleEventsUsageDescription: "Hands-Free synthesizes a paste keystroke to insert transcribed text into the focused field."
