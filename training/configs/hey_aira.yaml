@@ -70,8 +70,9 @@ output_dir: ./output
 
 augmentation:
   clip_duration: 2.0
-  batch_size: 16
-  rounds: 3
+  batch_size: 32      # More parallel DSP workers per batch.
+  rounds: 2           # LiveKit's default is 3; 2 is still production-grade
+                      # and cuts augmentation wall-clock by 1/3.
   background_paths: [./data/backgrounds]
   rir_paths: [./data/rirs]
 

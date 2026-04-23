@@ -8,6 +8,7 @@ struct SettingsView: View {
     @State private var launchAtLogin: Bool = LaunchAtLogin.isEnabled
 
     @State private var audioCueMode: AudioCueMode = Preferences.audioCueMode
+    @State private var wakeExecutionProvider: Preferences.WakeWordExecutionProvider = Preferences.wakeWordExecutionProvider
     @AppStorage("transcriptionModel")       private var transcriptionModel = GroqClient.Model.whisperTurbo
     @AppStorage("transcriptionVocabulary")  private var vocabulary = ""
     @AppStorage("language")                 private var language = ""
@@ -16,6 +17,7 @@ struct SettingsView: View {
     @AppStorage("askAIModel")               private var askAIModel = GroqClient.LLMModel.llama33_70b
     @AppStorage("askAISystemPrompt")        private var askAISystemPrompt = Preferences.defaultAskAISystemPrompt
     @AppStorage("wakeWordEnabled")          private var wakeWordEnabled = false
+    @AppStorage("wakeWordThreshold")        private var wakeWordThreshold = 0.5
 
     var body: some View {
         Form {
@@ -104,6 +106,34 @@ struct SettingsView: View {
                 Text("After the cue, start speaking. Hands-Free auto-submits once you pause for about a second — or click the pill to cancel.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text("Sensitivity")
+                        Spacer()
+                        Text(String(format: "%.2f", wakeWordThreshold))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    Slider(value: $wakeWordThreshold, in: 0.10...0.95, step: 0.05)
+                    Text("Lower = fires more easily (better in noisy rooms). Higher = fewer false triggers. Default 0.50 works for most voices.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Picker("Compute backend", selection: $wakeExecutionProvider) {
+                    ForEach(Preferences.WakeWordExecutionProvider.allCases) { provider in
+                        Text(provider.label).tag(provider)
+                    }
+                }
+                .onChange(of: wakeExecutionProvider) { _, newValue in
+                    Preferences.wakeWordExecutionProvider = newValue
+                }
+                Text("ONNX Runtime execution provider. Switch if CoreML pegs a core — pure ORT CPU can be lower-power for small models.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }

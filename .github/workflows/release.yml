@@ -18,6 +18,10 @@ jobs:
   build:
     runs-on: macos-15
     timeout-minutes: 25
+    # Only release tags whose commit is reachable from main — prevents
+    # accidental releases from feature branches. Manual runs via
+    # workflow_dispatch skip this guard so you can still cut ad-hoc builds.
+    if: github.event_name == 'workflow_dispatch' || github.event.base_ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
         with:
