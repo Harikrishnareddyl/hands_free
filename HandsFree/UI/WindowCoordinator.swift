@@ -14,7 +14,7 @@ final class WindowCoordinator {
         }
         let w = makeWindow(
             title: "Hands-Free Settings",
-            size: NSSize(width: 480, height: 560),
+            size: NSSize(width: 820, height: 620),
             style: [.titled, .closable, .miniaturizable, .resizable],
             content: SettingsView()
         )
@@ -29,7 +29,7 @@ final class WindowCoordinator {
         }
         let w = makeWindow(
             title: "Hands-Free History",
-            size: NSSize(width: 720, height: 480),
+            size: NSSize(width: 760, height: 520),
             style: [.titled, .closable, .miniaturizable, .resizable],
             content: HistoryView()
         )
@@ -47,7 +47,7 @@ final class WindowCoordinator {
         }
         let w = makeWindow(
             title: "HandsFree — Setup",
-            size: NSSize(width: 560, height: 460),
+            size: NSSize(width: 580, height: 520),
             style: [.titled],   // no .closable → no red close button
             content: view
         )

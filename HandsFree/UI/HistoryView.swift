@@ -11,10 +11,16 @@ struct HistoryView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            searchBar
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-            Divider()
+            toolbar
+                .padding(.horizontal, DS.space16)
+                .padding(.vertical, DS.space12)
+                .background(.ultraThinMaterial)
+                .overlay(
+                    Rectangle()
+                        .fill(Color.primary.opacity(DS.rowStrokeOpacity))
+                        .frame(height: DS.hairline),
+                    alignment: .bottom
+                )
 
             if entries.isEmpty && !isLoading {
                 emptyState
@@ -24,12 +30,14 @@ struct HistoryView: View {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(entries, id: \.rowID) { entry in
                             HistoryRow(entry: entry)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
+                                .padding(.horizontal, DS.space16)
+                                .padding(.vertical, DS.space12)
                                 .onAppear {
                                     maybeLoadMore(triggeredBy: entry)
                                 }
                             Divider()
+                                .opacity(0.4)
+                                .padding(.leading, DS.space16)
                         }
                         if isLoading {
                             HStack {
@@ -37,31 +45,88 @@ struct HistoryView: View {
                                 ProgressView().controlSize(.small)
                                 Spacer()
                             }
-                            .padding(.vertical, 12)
+                            .padding(.vertical, DS.space12)
                         }
                     }
                 }
             }
 
-            Divider()
-            HStack {
-                Text(footerText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button("Clear all") {
-                    HistoryStore.shared.deleteAll()
-                }
-                .disabled(entries.isEmpty)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            statusBar
         }
-        .frame(minWidth: 640, minHeight: 420)
+        .frame(minWidth: 720, minHeight: 460)
+        .background(Color(NSColor.windowBackgroundColor))
         .onAppear { reset() }
         .onReceive(NotificationCenter.default.publisher(for: .historyDidChange)) { _ in
             reset()
         }
+    }
+
+    // MARK: - Toolbar
+
+    private var toolbar: some View {
+        HStack(spacing: DS.space10) {
+            HStack(spacing: DS.space6) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                    .font(.system(size: 12, weight: .medium))
+                TextField("Search transcripts", text: Binding(
+                    get: { search },
+                    set: { newValue in
+                        search = newValue
+                        reset()
+                    }
+                ))
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                if !search.isEmpty {
+                    Button {
+                        search = ""
+                        reset()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Clear search")
+                }
+            }
+            .padding(.horizontal, DS.space10)
+            .padding(.vertical, DS.space8)
+            .background(
+                RoundedRectangle(cornerRadius: DS.radiusSmall, style: .continuous)
+                    .fill(Color(NSColor.controlBackgroundColor))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: DS.radiusSmall, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(DS.cardStrokeOpacity), lineWidth: DS.hairline)
+            )
+        }
+    }
+
+    private var statusBar: some View {
+        HStack {
+            Text(footerText)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button(role: .destructive) {
+                HistoryStore.shared.deleteAll()
+            } label: {
+                Label("Clear all", systemImage: "trash")
+                    .font(.system(size: 12))
+            }
+            .buttonStyle(.borderless)
+            .disabled(entries.isEmpty)
+        }
+        .padding(.horizontal, DS.space16)
+        .padding(.vertical, DS.space10)
+        .background(.ultraThinMaterial)
+        .overlay(
+            Rectangle()
+                .fill(Color.primary.opacity(DS.rowStrokeOpacity))
+                .frame(height: DS.hairline),
+            alignment: .top
+        )
     }
 
     private var footerText: String {
@@ -71,28 +136,27 @@ struct HistoryView: View {
         return "\(count)\(suffix) \(unit)"
     }
 
-    private var searchBar: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-            TextField("Search transcripts", text: Binding(
-                get: { search },
-                set: { newValue in
-                    search = newValue
-                    reset()
-                }
-            ))
-            .textFieldStyle(.plain)
-        }
-    }
-
     private var emptyState: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "mic.slash")
-                .font(.system(size: 36))
-                .foregroundStyle(.secondary)
-            Text(search.isEmpty ? "No transcriptions yet." : "No matches.")
-                .foregroundStyle(.secondary)
+        VStack(spacing: DS.space12) {
+            ZStack {
+                Circle()
+                    .fill(Color.secondary.opacity(0.10))
+                    .frame(width: 56, height: 56)
+                Image(systemName: search.isEmpty ? "mic.slash" : "magnifyingglass")
+                    .font(.system(size: 22, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            VStack(spacing: 4) {
+                Text(search.isEmpty ? "No transcriptions yet" : "No matches")
+                    .font(.system(size: 14, weight: .semibold))
+                Text(search.isEmpty
+                     ? "Hold Fn or your hotkey to dictate; transcripts show up here."
+                     : "Try a different search term.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 320)
+            }
         }
     }
 
@@ -140,40 +204,52 @@ private extension HistoryStore.Entry {
 
 private struct HistoryRow: View {
     let entry: HistoryStore.Entry
+    @State private var isHovered = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: DS.space8) {
                 Text(entry.createdAt, style: .relative)
-                    .font(.caption)
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
-                Text("·")
-                    .foregroundStyle(.secondary)
+                metaSeparator
                 Text(String(format: "%.1fs", entry.durationSeconds))
-                    .font(.caption)
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+                    .monospacedDigit()
                 if let app = entry.appBundleID, !app.isEmpty {
-                    Text("·")
-                        .foregroundStyle(.secondary)
+                    metaSeparator
                     Text(app)
-                        .font(.caption)
+                        .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                        .truncationMode(.middle)
                 }
                 Spacer()
                 Button {
                     copy(displayText)
                 } label: {
                     Image(systemName: "doc.on.doc")
+                        .font(.system(size: 11, weight: .medium))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.borderless)
                 .help("Copy to clipboard")
+                .opacity(isHovered ? 1 : 0.5)
             }
             Text(displayText)
+                .font(.system(size: 13))
                 .lineLimit(4)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .contentShape(Rectangle())
+        .onHover { isHovered = $0 }
+    }
+
+    private var metaSeparator: some View {
+        Text("·")
+            .foregroundStyle(.secondary)
+            .font(.system(size: 11))
     }
 
     private var displayText: String {

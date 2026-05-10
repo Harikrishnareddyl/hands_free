@@ -28,57 +28,65 @@ struct OnboardingView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: DS.space20) {
             header
-            Divider()
 
-            permissionRow(
-                icon: "mic.fill",
-                title: "Microphone",
-                required: true,
-                description: "Capture your voice while dictating.",
-                status: micStatus,
-                actionLabel: micButtonLabel,
-                action: requestMic
+            VStack(alignment: .leading, spacing: 0) {
+                permissionRow(
+                    icon: "mic.fill",
+                    title: "Microphone",
+                    pill: ("REQUIRED", .warning),
+                    description: "Capture your voice while dictating.",
+                    status: micStatus,
+                    actionLabel: micButtonLabel,
+                    action: requestMic
+                )
+                RowSeparator()
+                permissionRow(
+                    icon: "hand.raised.fill",
+                    title: "Accessibility",
+                    pill: ("REQUIRED", .warning),
+                    description: "Paste transcribed text into the focused app.",
+                    status: axStatus,
+                    actionLabel: "Open Settings",
+                    action: openAccessibilitySettings
+                )
+                RowSeparator()
+                permissionRow(
+                    icon: "key.fill",
+                    title: "Groq API key",
+                    pill: ("REQUIRED", .warning),
+                    description: "Needed to send your audio to Whisper for transcription.",
+                    status: keyStatus,
+                    actionLabel: "Set up key…",
+                    action: onOpenAPIKeySetup
+                )
+                RowSeparator()
+                permissionRow(
+                    icon: "keyboard",
+                    title: "Input Monitoring",
+                    pill: ("OPTIONAL", .neutral),
+                    description: "Enables the Fn (🌐) key as a hotkey. ⌃⌥D always works without this.",
+                    status: imStatus,
+                    actionLabel: "Open Settings",
+                    action: onTryInstallFn
+                )
+                RowSeparator()
+                wakeWordRow
+            }
+            .background(
+                RoundedRectangle(cornerRadius: DS.radiusMedium, style: .continuous)
+                    .fill(Color(NSColor.controlBackgroundColor))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: DS.radiusMedium, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(DS.cardStrokeOpacity), lineWidth: DS.hairline)
             )
 
-            permissionRow(
-                icon: "hand.raised.fill",
-                title: "Accessibility",
-                required: true,
-                description: "Paste transcribed text into the focused app.",
-                status: axStatus,
-                actionLabel: "Open Settings",
-                action: openAccessibilitySettings
-            )
-
-            permissionRow(
-                icon: "key.fill",
-                title: "Groq API key",
-                required: true,
-                description: "Needed to send your audio to Whisper for transcription.",
-                status: keyStatus,
-                actionLabel: "Set up key…",
-                action: onOpenAPIKeySetup
-            )
-
-            permissionRow(
-                icon: "keyboard",
-                title: "Input Monitoring (optional)",
-                required: false,
-                description: "Enables the Fn (🌐) key as a hotkey. ⌃⌥D always works without this.",
-                status: imStatus,
-                actionLabel: "Open Settings",
-                action: onTryInstallFn
-            )
-
-            wakeWordRow
-
-            Divider()
             footer
         }
-        .padding(24)
-        .frame(width: 560)
+        .padding(DS.space24)
+        .frame(width: 580)
         .onAppear {
             refresh()
             pollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
@@ -91,14 +99,14 @@ struct OnboardingView: View {
     // MARK: - Sub-views
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 14) {
-            Image(systemName: "mic.circle.fill")
-                .font(.system(size: 40))
-                .foregroundStyle(Color(red: 0.42, green: 0.20, blue: 0.95))
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Finish setting up HandsFree")
-                    .font(.title2.weight(.semibold))
-                Text("HandsFree can't run without these permissions. Grant them below, then click Continue.")
+        HStack(alignment: .top, spacing: DS.space14) {
+            BrandMark(size: 44, corner: 12, iconSize: 18)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Finish setting up Hands-Free")
+                    .font(.system(size: 20, weight: .semibold))
+                    .tracking(-0.3)
+                Text("Hands-Free can't run without these permissions. Grant them below, then click Continue.")
+                    .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -108,12 +116,15 @@ struct OnboardingView: View {
     private var footer: some View {
         HStack {
             if requiredGranted {
-                Label("All required permissions granted", systemImage: "checkmark.seal.fill")
-                    .foregroundStyle(.green)
-                    .labelStyle(.titleAndIcon)
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.seal.fill")
+                        .foregroundStyle(DS.success)
+                    Text("All required permissions granted")
+                        .font(.system(size: 12, weight: .medium))
+                }
             } else {
                 Text("This window refreshes automatically — grants show up in a second or two.")
-                    .font(.caption)
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -121,39 +132,33 @@ struct OnboardingView: View {
             Button("Continue") { onContinue() }
                 .keyboardShortcut(.defaultAction)
                 .disabled(!requiredGranted)
+                .controlSize(.regular)
         }
     }
 
     private func permissionRow(
         icon: String,
         title: String,
-        required: Bool,
+        pill: (String, StatusPill.Tone),
         description: String,
         status: Status,
         actionLabel: String,
         action: @escaping () -> Void
     ) -> some View {
-        HStack(spacing: 14) {
+        HStack(spacing: DS.space14) {
             Image(systemName: icon)
-                .font(.system(size: 18))
-                .foregroundStyle(Color(red: 0.42, green: 0.20, blue: 0.95))
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(DS.brand)
                 .frame(width: 28)
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    Text(title).fontWeight(.medium)
-                    if required {
-                        Text("REQUIRED")
-                            .font(.system(size: 9, weight: .bold))
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(Color.orange.opacity(0.15))
-                            .foregroundStyle(.orange)
-                            .cornerRadius(3)
-                    }
+                    Text(title)
+                        .font(.system(size: 12, weight: .semibold))
+                    StatusPill(text: pill.0, tone: pill.1)
                 }
                 Text(description)
-                    .font(.caption)
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -164,36 +169,38 @@ struct OnboardingView: View {
             case .unknown:
                 ProgressView().controlSize(.small)
             case .granted:
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                    .font(.system(size: 20))
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(DS.success)
+                        .font(.system(size: 16))
+                    Text("Granted")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(DS.success)
+                }
             case .missing:
                 Button(actionLabel) { action() }
+                    .controlSize(.small)
             }
         }
-        .padding(.vertical, 4)
+        .padding(.horizontal, DS.space14)
+        .padding(.vertical, DS.space12)
     }
 
     private var wakeWordRow: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: DS.space14) {
             Image(systemName: "waveform.badge.mic")
-                .font(.system(size: 18))
-                .foregroundStyle(Color(red: 0.42, green: 0.20, blue: 0.95))
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(DS.brand)
                 .frame(width: 28)
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    Text("Wake word").fontWeight(.medium)
-                    Text("OPT-IN")
-                        .font(.system(size: 9, weight: .bold))
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(Color.blue.opacity(0.12))
-                        .foregroundStyle(.blue)
-                        .cornerRadius(3)
+                    Text("Wake word")
+                        .font(.system(size: 12, weight: .semibold))
+                    StatusPill(text: "OPT-IN", tone: .info)
                 }
                 Text("Say \u{201C}\(WakeWordEngine.wakePhrase)\u{201D} to dictate without a hotkey. Listens on-device; audio only leaves your Mac after the phrase fires.")
-                    .font(.caption)
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -210,7 +217,8 @@ struct OnboardingView: View {
             .toggleStyle(.switch)
             .labelsHidden()
         }
-        .padding(.vertical, 4)
+        .padding(.horizontal, DS.space14)
+        .padding(.vertical, DS.space12)
     }
 
     // MARK: - Actions
